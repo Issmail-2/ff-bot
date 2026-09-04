@@ -1032,7 +1032,7 @@ client.on(Events.MessageCreate, async (message) => {
     await manager.deleteChannel(message.guild, existing);
     manager.removeMatch(existing.id);
     await message.reply(`❌ Cancelled <@${target.id}>'s match!`);
-  } else if (content.startsWith('!blacklist')) {
+  } else if (content.startsWith('&blacklist')) {
     const isAdmin = message.member.permissions.has('Administrator');
     const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
     if (!isAdmin && !hasRole) {
@@ -1040,7 +1040,7 @@ client.on(Events.MessageCreate, async (message) => {
     }
     const args = message.content.trim().split(/\s+/);
     if (args.length < 4) {
-      return message.reply('Usage: `!blacklist <userId> <duration> <reason>`\nDurations: `30m`, `5h`, `7d`, `2w`, `perm`');
+      return message.reply('Usage: `&blacklist <userId> <duration> <reason>`\nDurations: `30m`, `5h`, `7d`, `2w`, `perm`');
     }
     const userId = args[1];
     if (!/^\d{15,20}$/.test(userId)) {
@@ -1054,7 +1054,7 @@ client.on(Events.MessageCreate, async (message) => {
     const entry = blacklistModule.blacklistUser(userId, durationMs === -1 ? null : durationMs, reason, message.author.id);
     const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
     await message.reply(`✅ <@${userId}> has been blacklisted!\n📋 Reason: ${reason}\n⏳ Expires: ${expiry}`);
-  } else if (content.startsWith('!unblacklist')) {
+  } else if (content.startsWith('&unblacklist')) {
     const isAdmin = message.member.permissions.has('Administrator');
     const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
     if (!isAdmin && !hasRole) {
@@ -1062,7 +1062,7 @@ client.on(Events.MessageCreate, async (message) => {
     }
     const args = message.content.trim().split(/\s+/);
     if (args.length < 2) {
-      return message.reply('Usage: `!unblacklist <userId>`');
+      return message.reply('Usage: `&unblacklist <userId>`');
     }
     const removed = blacklistModule.unblacklistUser(args[1]);
     await message.reply(removed ? `✅ <@${args[1]}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
