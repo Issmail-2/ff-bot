@@ -1,7 +1,9 @@
 node_modules/
 data/
-run_log.txt
+config.json
+config.json.deploy
 config.json.real
+run_log.txt
 add_pts.js
 check.js
 clean.js

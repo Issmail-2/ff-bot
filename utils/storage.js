@@ -1,6 +1,11 @@
 const fs = require('fs');
 const path = require('path');
-const config = require('../config.json');
+let config;
+try { config = require('../config.json'); } catch { config = {}; }
+if (!config.modes) config.modes = {};
+if (!config.modes.amo) config.modes.amo = { pointsFile: './data/points.json' };
+if (!config.modes.esport) config.modes.esport = { pointsFile: './data/points_esport.json' };
+if (!config.pointsFile) config.pointsFile = './data/points.json';
 
 function pointsPathFor(mode) {
   const file = config.modes[mode] ? config.modes[mode].pointsFile : config.pointsFile;

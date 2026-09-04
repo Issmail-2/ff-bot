@@ -1,7 +1,11 @@
 const { ChannelType, PermissionsBitField } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const config = require('../config.json');
+let config;
+try { config = require('../config.json'); } catch { config = {}; }
+if (!config.modes) config.modes = {};
+if (!config.modes.amo) config.modes.amo = {};
+if (!config.modes.esport) config.modes.esport = {};
 
 const activeMatches = new Map();
 const MATCHES_FILE = path.resolve(__dirname, '..', 'data', 'matches.json');
