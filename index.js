@@ -433,6 +433,34 @@ async function cleanupOldMessages(channel) {
   }
 }
 
+async function performJoin(interaction, match, team) {
+  const result = manager.joinTeam(match.id, interaction.user.id, team);
+  if (!result.success) {
+    return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
+  }
+
+  const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
+  if (msg) {
+    await msg.edit({
+      content: await buildMatchBox(interaction.guild, match, interaction.user),
+      components: buildMatchButtons(match, interaction.user.id)
+    });
+  }
+
+  await interaction.reply({ content: `✅ Joined Team ${team}!`, ephemeral: true });
+  await updateMatchChannel(interaction.guild, match);
+
+  if (manager.isTeamsFull(match.id)) {
+    try {
+      await startFullMatch(interaction.guild, match);
+      await interaction.channel.send({ content: `🎮 **Match ready!** Players moved to voice channels.` }).catch(() => {});
+    } catch (e) {
+      console.error('Error starting match:', e);
+      await interaction.channel.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(() => {});
+    }
+  }
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId.startsWith('roommodal_')) {
     const matchId = interaction.customId.replace('roommodal_', '');
@@ -502,31 +530,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: '❌ Wrong join key! You can\'t join this match.', ephemeral: true });
     }
 
-    const result = manager.joinTeam(matchId, interaction.user.id, team);
-    if (!result.success) {
-      return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
-    }
-
-    const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
-    if (msg) {
-      await msg.edit({
-        content: await buildMatchBox(interaction.guild, match, interaction.user),
-        components: buildMatchButtons(match, interaction.user.id)
-      });
-    }
-
-    await interaction.reply({ content: `✅ Joined Team ${team}!`, ephemeral: true });
-    await updateMatchChannel(interaction.guild, match);
-
-    if (manager.isTeamsFull(matchId)) {
-      try {
-        await startFullMatch(interaction.guild, match);
-        await interaction.channel.send({ content: `🎮 **Match ready!** Players moved to voice channels.` }).catch(() => {});
-      } catch (e) {
-        console.error('Error starting match:', e);
-        await interaction.channel.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(() => {});
-      }
-    }
+    await performJoin(interaction, match, team);
   }
 
   if (interaction.isButton()) {
@@ -563,10 +567,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const keyInput = new TextInputBuilder()
         .setCustomId('keyInput')
-        .setLabel('Join Key')
-        .setPlaceholder('Share this key so friends can join your team')
+        .setLabel('Join Key (Optional)')
+        .setPlaceholder('Optional - leave empty to let anyone join')
         .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+        .setRequired(false);
 
       const row3 = new ActionRowBuilder().addComponents(keyInput);
 
@@ -580,6 +584,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (!isInRequiredVoice(interaction.member)) {
         return interaction.reply({ content: voiceCheckMessage(), ephemeral: true });
+      }
+
+      if (!match.key) {
+        return performJoin(interaction, match, team);
       }
 
       const keyModal = new ModalBuilder()
