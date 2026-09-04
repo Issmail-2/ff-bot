@@ -4,6 +4,7 @@
   "voiceCategoryId": "1545316338145165332",
   "pointsFile": "./data/points.json",
   "supervisorRoleId": "1506540916519731310",
+  "roomCategoryId": "1545316338145165332",
   "pointsRoles": ["1450212500581646460"],
   "pointsUsers": ["1177600499298599035"],
   "staffRoles": [

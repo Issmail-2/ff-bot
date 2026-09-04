@@ -290,8 +290,9 @@ async function startFullMatch(guild, match) {
 
   await roomChannel.send({ embeds: [privateEmbed] }).catch(e => console.error('Failed to post room info:', e.message));
 
-  const publicChannel = guild.channels.cache.get(match.channelId);
-  if (publicChannel) {
+  const roomChannelId = match.channelId2;
+  const roomChat = guild.channels.cache.get(roomChannelId) || roomChannel;
+  if (roomChat) {
     try {
       const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
       match.mvpWinnerSet = false;
@@ -316,7 +317,7 @@ async function startFullMatch(guild, match) {
         new ButtonBuilder().setCustomId(`staffreq_${match.id}`).setLabel('🛡️ Staff Request').setStyle(ButtonStyle.Secondary)
       );
 
-      const boxMsg = await publicChannel.send({ content: `${mentions}\n${roleMentions}`, embeds: [resultEmbed], components: [row] });
+      const boxMsg = await roomChat.send({ content: `${mentions}\n${roleMentions}`, embeds: [resultEmbed], components: [row] });
       match.resultMessageId = boxMsg.id;
       manager.persistMatches();
     } catch (e) {
@@ -519,7 +520,7 @@ async function settleMatchResult(guild, match) {
     mvpLoserId: match.mvpLoserId
   });
 
-  const channel = guild.channels.cache.get(match.channelId);
+  const channel = guild.channels.cache.get(match.channelId2);
   if (channel && match.resultMessageId) {
     const msg = await channel.messages.fetch(match.resultMessageId).catch(() => null);
     if (msg) {
@@ -799,10 +800,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: '❌ Only players in this match can request staff!', ephemeral: true });
       }
       const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
-      await interaction.reply({
-        content: `🛡️ **Staff Request** from <@${interaction.user.id}> for Match ${match.teamSize}v${match.teamSize}.\n${roleMentions}`,
-        ephemeral: false
-      });
+      const publicChannel = guild.channels.cache.get(match.channelId);
+      const staffMsg = `🛡️ **Staff Request** from <@${interaction.user.id}> for Match ${match.teamSize}v${match.teamSize}.\n${roleMentions}`;
+      if (publicChannel) {
+        await publicChannel.send({ content: staffMsg }).catch(() => {});
+        await interaction.reply({ content: '✅ Staff has been notified!', ephemeral: true });
+      } else {
+        await interaction.reply({ content: staffMsg, ephemeral: true });
+      }
       return;
     }
 

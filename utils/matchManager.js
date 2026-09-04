@@ -6,6 +6,8 @@ try { config = require('../config.json'); } catch { config = {}; }
 if (!config.modes) config.modes = {};
 if (!config.modes.amo) config.modes.amo = {};
 if (!config.modes.esport) config.modes.esport = {};
+if (process.env.ROOM_CATEGORY_ID) config.roomCategoryId = process.env.ROOM_CATEGORY_ID;
+if (!config.roomCategoryId) config.roomCategoryId = '1545316338145165332';
 
 const activeMatches = new Map();
 const MATCHES_FILE = path.resolve(__dirname, '..', 'data', 'matches.json');
@@ -208,8 +210,7 @@ function isTeamsFull(matchId) {
 }
 
 async function createVoiceChannels(guild, match) {
-  const mode = config.modes[match.mode] || config.modes.amo;
-  const category = guild.channels.cache.get(mode.voiceCategoryId);
+  const category = guild.channels.cache.get(config.roomCategoryId);
   const botMember = guild.members.me;
 
   const team1Overwrites = [
@@ -271,8 +272,7 @@ async function createVoiceChannels(guild, match) {
 }
 
 async function createChannel(guild, match) {
-  const mode = config.modes[match.mode] || config.modes.amo;
-  const category = guild.channels.cache.get(mode.voiceCategoryId);
+  const category = guild.channels.cache.get(config.roomCategoryId);
   const botMember = guild.members.me;
   const overwrites = [
     {
