@@ -108,7 +108,10 @@ async function applyRankNicknames(guild) {
       const base = (member.nickname || member.user.username).replace(/^Rank\s+\d+\s*/i, '');
       const newNick = (`Rank ${rank} ${base}`).slice(0, 32);
       if (member.nickname !== newNick) {
-        await member.setNickname(newNick).catch(() => { failed++; });
+        await member.setNickname(newNick).catch(e => {
+          failed++;
+          console.log(`[RANK] cannot rename ${uid} (${base}): ${e.message}`);
+        });
       }
       done++;
       await new Promise(r => setTimeout(r, 1200));
