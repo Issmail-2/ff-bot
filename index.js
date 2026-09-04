@@ -11,6 +11,14 @@ if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705
 if (!config.pointsFile) config.pointsFile = './data/points.json';
 if (!config.logsCategoryId) config.logsCategoryId = config.modes.amo.logsCategoryId;
 if (!config.voiceCategoryId) config.voiceCategoryId = config.modes.amo.voiceCategoryId;
+if (!config.requiredVoiceChannels) {
+  config.requiredVoiceChannels = [
+    process.env.REQUIRED_VOICE_CHANNEL_1 || '1423528602418286595',
+    process.env.REQUIRED_VOICE_CHANNEL_2 || '1450206308367073291',
+    process.env.REQUIRED_VOICE_CHANNEL_3 || '1495304938631204945',
+    process.env.REQUIRED_VOICE_CHANNEL_4 || '1495304629322518635'
+  ];
+}
 const storage = require('./utils/storage');
 const manager = require('./utils/matchManager');
 
@@ -49,6 +57,16 @@ function parseTeamSize(arg) {
   }
   if (/^[234]$/.test(arg.trim())) return parseInt(arg.trim());
   return null;
+}
+
+function isInRequiredVoice(member) {
+  if (!member || !member.voice) return false;
+  return config.requiredVoiceChannels.includes(member.voice.channelId);
+}
+
+function voiceCheckMessage() {
+  const list = config.requiredVoiceChannels.map(id => `<#${id}>`).join(', ');
+  return `❌ To host or join a match you must be inside one of the lobby voice channels: ${list}`;
 }
 
 async function ensureEsportChannels(guild) {
@@ -140,7 +158,7 @@ async function updateMatchChannel(guild, match) {
   const embed = new EmbedBuilder()
     .setTitle(`🎮 ${match.teamSize}v${match.teamSize} Match Room`)
     .setColor(0xFF6600)
-    .setDescription(`**🏠 Room ID:** \`${match.roomId}\`\n**🔑 Password:** \`${match.password}\``)
+    .setDescription(`**🏠 Room ID:** \`${match.roomId}\`\n**🔑 Password:** \`${match.password}\`\n**🔐 Match Key:** \`${match.key || '—'}\``)
     .addFields(
       { name: `🟢 Team 1 (${match.team1.length}/${match.teamSize})`, value: list1, inline: true },
       { name: `🔴 Team 2 (${match.team2.length}/${match.teamSize})`, value: list2, inline: true }
@@ -181,7 +199,7 @@ async function startFullMatch(guild, match) {
   const privateEmbed = new EmbedBuilder()
     .setTitle(`🎮 Match Room - ${match.teamSize}v${match.teamSize}`)
     .setColor(0x00FF00)
-    .setDescription(`**Room ID:** \`${match.roomId}\`\n**Password:** \`${match.password}\`\n\n**Voice channels:**\n🟢 Team 1: <#${team1Channel.id}>\n🔴 Team 2: <#${team2Channel.id}>`)
+    .setDescription(`**Room ID:** \`${match.roomId}\`\n**Password:** \`${match.password}\`\n**Match Key:** \`${match.key || '—'}\`\n\n**Voice channels:**\n🟢 Team 1: <#${team1Channel.id}>\n🔴 Team 2: <#${team2Channel.id}>`)
     .setFooter({ text: 'This room is only visible to match players.' });
 
   await roomChannel.send({ embeds: [privateEmbed] }).catch(e => console.error('Failed to post room info:', e.message));
@@ -256,6 +274,10 @@ client.on(Events.MessageCreate, async (message) => {
     const teamSize = parseTeamSize(args[1]);
     if (!teamSize) {
       return message.reply(`❌ Please specify a team size: \`${modeCfg.command} 2v2\`, \`${modeCfg.command} 3v3\`, or \`${modeCfg.command} 4v4\`.`);
+    }
+
+    if (!isInRequiredVoice(message.member)) {
+      return message.reply(voiceCheckMessage());
     }
 
     await cleanupOldMessages(message.channel);
@@ -343,6 +365,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const roomId = interaction.fields.getTextInputValue('roomIdInput').trim();
     const password = interaction.fields.getTextInputValue('passwordInput').trim();
+    const matchKey = interaction.fields.getTextInputValue('keyInput').trim();
 
     if (![2, 3, 4].includes(match.teamSize)) {
       console.log('[MODAL] invalid team size on match', match.teamSize);
@@ -351,8 +374,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     match.roomId = roomId;
     match.password = password;
+    match.key = matchKey;
     match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} creator auto-joined T1`);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
 
     try {
       const matchBox = await buildMatchBox(interaction.guild, match, interaction.user);
@@ -372,6 +396,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } catch (e) {
       console.error('Error creating match:', e);
       await interaction.editReply({ content: `❌ Error creating match: ${e.message}.` }).catch(() => {});
+    }
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('joinkey_')) {
+    const team = parseInt(interaction.customId.slice(interaction.customId.lastIndexOf('_') + 1));
+    const matchId = interaction.customId.slice('joinkey_'.length, interaction.customId.lastIndexOf('_'));
+    const match = manager.getMatch(matchId);
+    if (!match) return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+
+    if (!isInRequiredVoice(interaction.member)) {
+      return interaction.reply({ content: voiceCheckMessage(), ephemeral: true });
+    }
+
+    const key = interaction.fields.getTextInputValue('matchKeyInput').trim();
+    if (match.key && key !== match.key) {
+      return interaction.reply({ content: '❌ Wrong join key! You can\'t join this match.', ephemeral: true });
+    }
+
+    const result = manager.joinTeam(matchId, interaction.user.id, team);
+    if (!result.success) {
+      return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
+    }
+
+    const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
+    if (msg) {
+      await msg.edit({
+        content: await buildMatchBox(interaction.guild, match, interaction.user),
+        components: buildMatchButtons(match, interaction.user.id)
+      });
+    }
+
+    await interaction.reply({ content: `✅ Joined Team ${team}!`, ephemeral: true });
+    await updateMatchChannel(interaction.guild, match);
+
+    if (manager.isTeamsFull(matchId)) {
+      try {
+        await startFullMatch(interaction.guild, match);
+        await interaction.channel.send({ content: `🎮 **Match ready!** Players moved to voice channels.` }).catch(() => {});
+      } catch (e) {
+        console.error('Error starting match:', e);
+        await interaction.channel.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(() => {});
+      }
     }
   }
 
@@ -407,38 +473,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const row1 = new ActionRowBuilder().addComponents(roomIdInput);
       const row2 = new ActionRowBuilder().addComponents(passwordInput);
 
-      roomModal.addComponents(row1, row2);
+      const keyInput = new TextInputBuilder()
+        .setCustomId('keyInput')
+        .setLabel('Join Key')
+        .setPlaceholder('Share this key so friends can join your team')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      const row3 = new ActionRowBuilder().addComponents(keyInput);
+
+      roomModal.addComponents(row1, row2, row3);
 
       return interaction.showModal(roomModal);
     }
 
     if (action === 'join1' || action === 'join2') {
       const team = action === 'join1' ? 1 : 2;
-      const result = manager.joinTeam(matchId, interaction.user.id, team);
-      if (!result.success) {
-        return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
+
+      if (!isInRequiredVoice(interaction.member)) {
+        return interaction.reply({ content: voiceCheckMessage(), ephemeral: true });
       }
 
-      const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
-      if (msg) {
-        await msg.edit({
-          content: await buildMatchBox(interaction.guild, match, interaction.user),
-          components: buildMatchButtons(match, interaction.user.id)
-        });
-      }
+      const keyModal = new ModalBuilder()
+        .setCustomId(`joinkey_${match.id}_${team}`)
+        .setTitle(`🔑 Join Team ${team}`);
 
-      await interaction.reply({ content: `✅ Joined Team ${team}!`, ephemeral: true });
-      await updateMatchChannel(interaction.guild, match);
+      const keyInputModal = new TextInputBuilder()
+        .setCustomId('matchKeyInput')
+        .setLabel('Match Key')
+        .setPlaceholder('Enter the key given by the match host')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
 
-      if (manager.isTeamsFull(matchId)) {
-        try {
-          await startFullMatch(interaction.guild, match);
-          await interaction.channel.send({ content: `🎮 **Match ready!** Players moved to voice channels.` }).catch(() => {});
-        } catch (e) {
-          console.error('Error starting match:', e);
-          await interaction.channel.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(() => {});
-        }
-      }
+      const keyRow = new ActionRowBuilder().addComponents(keyInputModal);
+
+      keyModal.addComponents(keyRow);
+
+      return interaction.showModal(keyModal);
     }
 
     if (action === 'leave') {
