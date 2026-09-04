@@ -1,0 +1,13 @@
+{
+  "name": "freefire-bot",
+  "version": "1.0.0",
+  "description": "Free Fire Discord Match Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3"
+  }
+}

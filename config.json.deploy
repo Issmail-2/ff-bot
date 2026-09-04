@@ -1,0 +1,37 @@
+{
+  "token": "YOUR_DISCORD_TOKEN_HERE",
+  "apostadoChannelId": "1545315593450954762",
+  "voiceCategoryId": "1545316338145165332",
+  "pointsFile": "./data/points.json",
+  "supervisorRoleId": "1506540916519731310",
+  "logsCategoryId": "1545364636034138112",
+  "modes": {
+    "amo": {
+      "name": "amo",
+      "displayName": "Custom Room",
+      "command": "!play",
+      "matchChannelId": "1545315593450954762",
+      "voiceCategoryId": "1545316338145165332",
+      "logsCategoryId": "1545364636034138112",
+      "pointsFile": "./data/points.json"
+    },
+    "esport": {
+      "name": "esport",
+      "displayName": "Esport",
+      "command": "!esport",
+      "matchChannelId": "1545388379309482037",
+      "voiceCategoryId": "1545386731686076476",
+      "logsCategoryId": "1545386732982374433",
+      "pointsFile": "./data/points_esport.json"
+    }
+  },
+  "matchPoints": {
+    "winner": 80,
+    "loser": 30
+  },
+  "emojis": {
+    "game": "<:Free_fire_logo:1466528905509736705>",
+    "team1": "<a:aHYPR_GREENDOTid:1545351146770796634>",
+    "team2": "<a:aredptid:1545350890989428829>"
+  }
+}
