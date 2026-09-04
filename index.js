@@ -82,6 +82,27 @@ function canAddPoints(member) {
   return false;
 }
 
+async function stripRankNicknames(guild) {
+  let done = 0;
+  try {
+    const members = await guild.members.fetch();
+    for (const member of members.values()) {
+      if (!member.nickname || !/^Rank\s+\d+\s+/i.test(member.nickname)) continue;
+      const base = member.nickname.replace(/^Rank\s+\d+\s*/i, '');
+      try {
+        await member.setNickname(base).catch(() => {});
+        done++;
+        await new Promise(r => setTimeout(r, 800));
+      } catch (e) {
+        console.log(`[RANK] cannot strip ${member.id}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    console.log('[RANK] strip error:', e.message);
+  }
+  return done;
+}
+
 async function applyRankNicknames(guild) {
   const combined = {};
   for (const mode of ['amo', 'esport']) {
@@ -300,6 +321,15 @@ function buildMatchButtons(match, userId) {
 
 client.once(Events.ClientReady, (c) => {
   console.log(`✅ Logged in as ${c.user.tag}!`);
+  for (const mode of ['amo', 'esport']) {
+    try {
+      const data = storage.loadPoints(mode);
+      const n = Object.keys(data.players || {}).length;
+      if (n > 0) console.log(`[DATA] ${mode}: ${n} players with points loaded`);
+    } catch (e) {
+      console.log(`[DATA] ${mode}: load failed:`, e.message);
+    }
+  }
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
 });
 
@@ -629,13 +659,13 @@ const adminCommands = {
 
     await message.reply({ embeds: [embed] });
   },
-  resetpoints: async (message, mode = 'amo') => {
+  resetpoints: async (message) => {
     if (!message.member.permissions.has('Administrator')) {
       return message.reply('❌ Only admins can reset points!');
     }
-    storage.resetAllPoints(mode);
-    await message.reply(`🔄 All ${getModeConfig(mode).displayName} points have been reset!`);
-    applyRankNicknames(message.guild).catch(() => {});
+    for (const mode of ['amo', 'esport']) storage.resetAllPoints(mode);
+    await message.reply('🔄 **All points have been reset for all modes!** Rank nicknames cleared.');
+    stripRankNicknames(message.guild).catch(() => {});
   },
   setpoints: async (message, mode = 'amo') => {
     if (!canAddPoints(message.member)) {
