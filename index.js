@@ -71,8 +71,14 @@ async function buildMatchBox(guild, match, creatorUser) {
   const progress1 = `${match.team1.length}/${match.teamSize}`;
   const progress2 = `${match.team2.length}/${match.teamSize}`;
 
-  const t1 = match.team1.map(id => `<@${id}>`).join('\n') || '*Empty*';
-  const t2 = match.team2.map(id => `<@${id}>`).join('\n') || '*Empty*';
+  const t1 = match.team1.map(id => {
+    const badge = storage.getRankBadge(id, match.mode || 'amo');
+    return badge ? `<@${id}> \`[${badge}]\`` : `<@${id}>`;
+  }).join('\n') || '*Empty*';
+  const t2 = match.team2.map(id => {
+    const badge = storage.getRankBadge(id, match.mode || 'amo');
+    return badge ? `<@${id}> \`[${badge}]\`` : `<@${id}>`;
+  }).join('\n') || '*Empty*';
   const display = getModeConfig(match.mode).displayName;
 
   let box = '';
@@ -100,8 +106,14 @@ async function buildMatchEmbed(guild, match, creatorUser) {
 async function updateMatchChannel(guild, match) {
   const channel = guild.channels.cache.get(match.channelId2);
   if (!channel) return;
-  const list1 = match.team1.length > 0 ? match.team1.map(id => `<@${id}>`).join('\n') : 'Empty';
-  const list2 = match.team2.length > 0 ? match.team2.map(id => `<@${id}>`).join('\n') : 'Empty';
+  const list1 = match.team1.length > 0 ? match.team1.map(id => {
+    const badge = storage.getRankBadge(id, match.mode || 'amo');
+    return badge ? `<@${id}> \`[${badge}]\`` : `<@${id}>`;
+  }).join('\n') : 'Empty';
+  const list2 = match.team2.length > 0 ? match.team2.map(id => {
+    const badge = storage.getRankBadge(id, match.mode || 'amo');
+    return badge ? `<@${id}> \`[${badge}]\`` : `<@${id}>`;
+  }).join('\n') : 'Empty';
   const embed = new EmbedBuilder()
     .setTitle(`🎮 ${match.teamSize}v${match.teamSize} Match Room`)
     .setColor(0xFF6600)
@@ -464,7 +476,8 @@ const adminCommands = {
       .setTitle(`🏆 ${getModeConfig(mode).displayName} Leaderboard`)
       .setColor(0xFFD700)
       .setDescription(sorted.map(([id, data], i) => {
-        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 3 ? '🥉' : `${i + 1}.`;
+        const rank = i + 1;
+        const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`;
         return `${medal} <@${id}> - **${data.totalPoints} pts** (${data.wins}W/${data.losses}L)`;
       }).join('\n'));
 

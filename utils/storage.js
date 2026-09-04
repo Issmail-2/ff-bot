@@ -79,4 +79,19 @@ function getLeaderboard(mode = 'amo') {
   return sorted;
 }
 
-module.exports = { getPlayerPoints, addPoints, removePoints, resetAllPoints, getLeaderboard, loadPoints };
+function getPlayerRank(userId, mode = 'amo') {
+  const sorted = getLeaderboard(mode);
+  const idx = sorted.findIndex(([id]) => id === userId);
+  return idx === -1 ? null : idx + 1;
+}
+
+function getRankBadge(userId, mode = 'amo') {
+  const rank = getPlayerRank(userId, mode);
+  if (!rank) return '';
+  if (rank === 1) return '🥇 #1';
+  if (rank === 2) return '🥈 #2';
+  if (rank === 3) return '🥉 #3';
+  return `#${rank}`;
+}
+
+module.exports = { getPlayerPoints, addPoints, removePoints, resetAllPoints, getLeaderboard, loadPoints, getPlayerRank, getRankBadge };
