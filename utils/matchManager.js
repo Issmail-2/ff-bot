@@ -77,7 +77,7 @@ function loadMatches() {
 
 function persistMatches() {
   ensureMatchesFile();
-  const arr = Array.from(activeMatches.values()).filter(m => m.status === 'waiting');
+  const arr = Array.from(activeMatches.values()).filter(m => m.status === 'waiting' || m.status === 'full');
   fs.writeFileSync(MATCHES_FILE, JSON.stringify(arr, null, 2));
 }
 

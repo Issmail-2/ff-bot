@@ -661,7 +661,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (matchId === null) return;
 
     const match = manager.getMatch(matchId);
-    if (!match) return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+    if (!match) {
+      console.log(`[SEL] match not found for customId=${cid}`);
+      return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+    }
 
     const selected = interaction.values[0];
 
@@ -702,7 +705,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const action = interaction.customId.slice(0, separator);
     const matchId = interaction.customId.slice(separator + 1);
     const match = manager.getMatch(matchId);
-    if (!match) return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+    if (!match) {
+      console.log(`[BTN] match not found for action=${action} matchId=${matchId}`);
+      return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+    }
 
     if (action === 'setup' || action === 'room') {
       if (match.creatorId !== interaction.user.id) {
