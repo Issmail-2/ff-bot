@@ -26,6 +26,9 @@ if (!config.pointsRoles) {
 if (!config.pointsUsers) {
   config.pointsUsers = process.env.POINTS_USER_IDS ? process.env.POINTS_USER_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1177600499298599035'];
 }
+if (!config.adminRoles) {
+  config.adminRoles = process.env.ADMIN_ROLE_IDS ? process.env.ADMIN_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310', '1466082863115145441'];
+}
 if (!config.staffRoles) {
   config.staffRoles = process.env.STAFF_ROLE_IDS ? process.env.STAFF_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1537318639395545139', '1506540916519731310', '1459133371874807921', '1466082863115145441'];
 }
@@ -85,9 +88,16 @@ function voiceCheckMessage() {
 }
 
 function canAddPoints(member) {
-  if (member.permissions.has('Administrator')) return true;
+  if (hasCommandAccess(member)) return true;
   if (config.pointsRoles.some(id => id && member.roles.cache.has(id))) return true;
   if (config.pointsUsers.includes(member.id)) return true;
+  return false;
+}
+
+function hasCommandAccess(member) {
+  if (!member) return false;
+  if (member.permissions.has('Administrator')) return true;
+  if (config.adminRoles.some(id => id && member.roles.cache.has(id))) return true;
   return false;
 }
 
@@ -461,7 +471,7 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   if (lowercase.startsWith('!forcefull')) {
-    if (!message.member.roles.cache.has(config.supervisorRoleId)) {
+    if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors can use this!');
     }
     const mode = getModeByChannel(message.channel.id);
@@ -1049,9 +1059,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   if (content.startsWith('&clear')) {
     const target = message.member;
-    const isAdmin = target.permissions.has('Administrator');
-    const hasRole = config.supervisorRoleId && target.roles.cache.has(config.supervisorRoleId);
-    if (!isAdmin && !hasRole) {
+    if (!hasCommandAccess(target)) {
       return message.reply('❌ Only supervisors/admins can use this!');
     }
     const args = message.content.trim().split(/\s+/);
@@ -1080,17 +1088,13 @@ client.on(Events.MessageCreate, async (message) => {
   } else if (content.startsWith('!setpoints')) {
     await adminCommands.setpoints(message, mode);
   } else if (content === '!clearmatches' || content === '!cleargames') {
-    const isAdmin = message.member.permissions.has('Administrator');
-    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
-    if (!isAdmin && !hasRole) {
+    if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can clear stuck matches!');
     }
     const cleared = manager.clearAllMatches();
     await message.reply(`🧹 Cleared **${cleared}** stuck match(es)!`);
   } else if (content.startsWith('!cancelgame')) {
-    const isAdmin = message.member.permissions.has('Administrator');
-    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
-    if (!isAdmin && !hasRole) {
+    if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can cancel a match!');
     }
     const target = message.mentions.users.first();
@@ -1102,9 +1106,7 @@ client.on(Events.MessageCreate, async (message) => {
     manager.removeMatch(existing.id);
     await message.reply(`❌ Cancelled <@${target.id}>'s match!`);
   } else if (content.startsWith('&blacklist')) {
-    const isAdmin = message.member.permissions.has('Administrator');
-    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
-    if (!isAdmin && !hasRole) {
+    if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can blacklist users!');
     }
     const args = message.content.trim().split(/\s+/);
@@ -1124,9 +1126,7 @@ client.on(Events.MessageCreate, async (message) => {
     const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
     await message.reply(`✅ <@${userId}> has been blacklisted!\n📋 Reason: ${reason}\n⏳ Expires: ${expiry}`);
   } else if (content.startsWith('&unblacklist')) {
-    const isAdmin = message.member.permissions.has('Administrator');
-    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
-    if (!isAdmin && !hasRole) {
+    if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can unblacklist users!');
     }
     const args = message.content.trim().split(/\s+/);
@@ -1136,18 +1136,14 @@ client.on(Events.MessageCreate, async (message) => {
     const removed = blacklistModule.unblacklistUser(args[1]);
     await message.reply(removed ? `✅ <@${args[1]}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
   } else if (content.startsWith('!setranks')) {
-    const isAdmin = message.member.permissions.has('Administrator');
-    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
-    if (!isAdmin && !hasRole) {
+    if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can set rank nicknames!');
     }
     await message.reply('⏳ Updating rank nicknames...');
     const res = await applyRankNicknames(message.guild);
     await message.channel.send(`✅ Rank nicknames updated: **${res.done}** set (${res.failed} skipped).`).catch(() => {});
   } else if (content === '!resetvote') {
-    const isAdmin = message.member.permissions.has('Administrator');
-    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
-    if (!isAdmin && !hasRole) {
+    if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can reset votes!');
     }
     const match = manager.getAllMatches().find(m =>
