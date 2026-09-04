@@ -38,6 +38,19 @@ function getModeConfig(mode) {
   return config.modes[mode] || config.modes.amo;
 }
 
+function parseTeamSize(arg) {
+  if (!arg) return null;
+  const m = arg.toLowerCase().match(/^(\d+)[vx](\d+)$/);
+  if (m) {
+    const a = parseInt(m[1]);
+    const b = parseInt(m[2]);
+    if (a === b && [2, 3, 4].includes(a)) return a;
+    return null;
+  }
+  if (/^[234]$/.test(arg.trim())) return parseInt(arg.trim());
+  return null;
+}
+
 async function ensureEsportChannels(guild) {
   const es = config.modes.esport;
   const botMember = guild.members.me;
@@ -211,7 +224,7 @@ function buildMatchButtons(match, userId) {
 
 client.once(Events.ClientReady, (c) => {
   console.log(`✅ Logged in as ${c.user.tag}!`);
-  c.user.setActivity('Free Fire | !play', { type: 3 });
+  c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
 });
 
 client.on(Events.MessageCreate, async (message) => {
@@ -239,13 +252,19 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply('❌ You already have a pending match! Cancel it first.');
     }
 
+    const args = content.split(/\s+/);
+    const teamSize = parseTeamSize(args[1]);
+    if (!teamSize) {
+      return message.reply(`❌ Please specify a team size: \`${modeCfg.command} 2v2\`, \`${modeCfg.command} 3v3\`, or \`${modeCfg.command} 4v4\`.`);
+    }
+
     await cleanupOldMessages(message.channel);
 
-    const match = manager.createMatch(message.author.id, null, message.channel.id, mode);
+    const match = manager.createMatch(message.author.id, teamSize, message.channel.id, mode);
 
     const setupEmbed = new EmbedBuilder()
-      .setTitle(`🎮 ${modeCfg.displayName} Match Setup`)
-      .setDescription(`<@${message.author.id}>, click **Set Room Config** to enter your match details.`)
+      .setTitle(`🎮 ${modeCfg.displayName} Match Setup (${teamSize}v${teamSize})`)
+      .setDescription(`<@${message.author.id}>, click **Set Room Config** to enter your **${teamSize}v${teamSize}** match room details.`)
       .setColor(0xFF6600)
       .setFooter({ text: 'This message will be replaced once configured.' });
 
@@ -322,22 +341,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.deferReply({ flags: 64 });
     console.log('[MODAL] deferred reply OK');
 
-    const teamSizeInput = interaction.fields.getTextInputValue('teamSizeInput').trim();
     const roomId = interaction.fields.getTextInputValue('roomIdInput').trim();
     const password = interaction.fields.getTextInputValue('passwordInput').trim();
 
-    const sizeMap = { '2': 2, '3': 3, '4': 4 };
-    const teamSize = sizeMap[teamSizeInput];
-    if (!teamSize) {
-      console.log('[MODAL] invalid team size', teamSizeInput);
-      return interaction.editReply({ content: '❌ Team size must be 2, 3, or 4!' });
+    if (![2, 3, 4].includes(match.teamSize)) {
+      console.log('[MODAL] invalid team size on match', match.teamSize);
+      return interaction.editReply({ content: '❌ Invalid team size. Start the match with `!play 2v2/3v3/4v4`!' });
     }
 
-    match.teamSize = teamSize;
     match.roomId = roomId;
     match.password = password;
     match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${teamSize} roomId=${roomId} pass=${password} creator auto-joined T1`);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} creator auto-joined T1`);
 
     try {
       const matchBox = await buildMatchBox(interaction.guild, match, interaction.user);
@@ -375,14 +390,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const roomModal = new ModalBuilder()
         .setCustomId(`roommodal_${match.id}`)
-        .setTitle('🏠 Enter Room Config');
-
-      const teamSizeInput = new TextInputBuilder()
-        .setCustomId('teamSizeInput')
-        .setLabel('Team Size (2, 3, or 4)')
-        .setPlaceholder('e.g. 4')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+        .setTitle(`🏠 ${match.teamSize}v${match.teamSize} Room Config`);
 
       const roomIdInput = new TextInputBuilder()
         .setCustomId('roomIdInput')
@@ -396,11 +404,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
 
-      const row1 = new ActionRowBuilder().addComponents(teamSizeInput);
-      const row2 = new ActionRowBuilder().addComponents(roomIdInput);
-      const row3 = new ActionRowBuilder().addComponents(passwordInput);
+      const row1 = new ActionRowBuilder().addComponents(roomIdInput);
+      const row2 = new ActionRowBuilder().addComponents(passwordInput);
 
-      roomModal.addComponents(row1, row2, row3);
+      roomModal.addComponents(row1, row2);
 
       return interaction.showModal(roomModal);
     }
