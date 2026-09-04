@@ -105,7 +105,12 @@ async function applyRankNicknames(guild) {
     try {
       const member = await guild.members.fetch(uid).catch(() => null);
       if (!member || member.user.bot) continue;
-      const base = (member.displayName || member.user.username).replace(/^Rank\s+\d+\s*/i, '');
+      const currentNick = member.nickname || '';
+      const isRankNick = /^Rank\s+\d+\s+/i.test(currentNick);
+      const base = (isRankNick
+        ? (member.user.displayName || member.user.username)
+        : (member.displayName || member.user.username)
+      ).replace(/^Rank\s+\d+\s*/i, '');
       const newNick = (`Rank ${rank} ${base}`).slice(0, 32);
       if (member.nickname !== newNick) {
         await member.setNickname(newNick).catch(e => {
