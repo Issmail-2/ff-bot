@@ -69,6 +69,43 @@ function voiceCheckMessage() {
   return `❌ To host or join a match you must be inside one of the lobby voice channels: ${list}`;
 }
 
+async function applyRankNicknames(guild) {
+  const combined = {};
+  for (const mode of ['amo', 'esport']) {
+    let data = null;
+    try { data = storage.loadPoints(mode); } catch (e) { data = null; }
+    if (!data || !data.players) continue;
+    for (const [uid, p] of Object.entries(data.players)) {
+      if (!combined[uid]) combined[uid] = { totalPoints: 0 };
+      combined[uid].totalPoints += (p.totalPoints || 0);
+    }
+  }
+  const ranked = Object.entries(combined)
+    .filter(([, p]) => p.totalPoints > 0)
+    .sort((a, b) => b[1].totalPoints - a[1].totalPoints);
+
+  let done = 0;
+  let failed = 0;
+  for (let i = 0; i < ranked.length; i++) {
+    const [uid] = ranked[i];
+    const rank = i + 1;
+    try {
+      const member = await guild.members.fetch(uid).catch(() => null);
+      if (!member || member.user.bot) continue;
+      const base = (member.nickname || member.user.username).replace(/^Rank\s+\d+\s*/i, '');
+      const newNick = (`Rank ${rank} ${base}`).slice(0, 32);
+      if (member.nickname !== newNick) {
+        await member.setNickname(newNick).catch(() => { failed++; });
+      }
+      done++;
+      await new Promise(r => setTimeout(r, 1200));
+    } catch {
+      failed++;
+    }
+  }
+  return { done, failed };
+}
+
 async function ensureEsportChannels(guild) {
   const es = config.modes.esport;
   const botMember = guild.members.me;
@@ -657,6 +694,15 @@ client.on(Events.MessageCreate, async (message) => {
     await manager.deleteChannel(message.guild, existing);
     manager.removeMatch(existing.id);
     await message.reply(`❌ Cancelled <@${target.id}>'s match!`);
+  } else if (content.startsWith('!setranks')) {
+    const isAdmin = message.member.permissions.has('Administrator');
+    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
+    if (!isAdmin && !hasRole) {
+      return message.reply('❌ Only supervisors/admins can set rank nicknames!');
+    }
+    await message.reply('⏳ Updating rank nicknames...');
+    const res = await applyRankNicknames(message.guild);
+    await message.channel.send(`✅ Rank nicknames updated: **${res.done}** set (${res.failed} skipped).`).catch(() => {});
   } else if (content === '!resetvote') {
     const isAdmin = message.member.permissions.has('Administrator');
     const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
@@ -749,6 +795,7 @@ client.on(Events.MessageCreate, async (message) => {
       });
 
       await manager.finishMatch(message.guild, doneMatch);
+      applyRankNicknames(message.guild).catch(() => {});
     } else {
       const pending = isWin ? '💪 **!l** loser' : '🏆 **!w** winner';
       await message.channel.send({ content: `⏳ Waiting for the ${pending} vote before finishing the match.`, }).catch(() => {});
