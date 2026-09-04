@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Events, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, Events, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionsBitField, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 let config;
 try { config = require('./config.json'); } catch { config = {}; }
 if (process.env.DISCORD_TOKEN) config.token = process.env.DISCORD_TOKEN;
@@ -25,6 +25,13 @@ if (!config.pointsRoles) {
 if (!config.pointsUsers) {
   config.pointsUsers = process.env.POINTS_USER_IDS ? process.env.POINTS_USER_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1177600499298599035'];
 }
+if (!config.staffRoles) {
+  config.staffRoles = process.env.STAFF_ROLE_IDS ? process.env.STAFF_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1537318639395545139', '1506540916519731310', '1459133371874807921', '1466082863115145441'];
+}
+if (!config.matchRewards) {
+  config.matchRewards = { winnerMvp: 80, winner: 50, loserMvp: 30, loser: 10 };
+}
+const REWARDS = config.matchRewards;
 const storage = require('./utils/storage');
 const manager = require('./utils/matchManager');
 
@@ -283,6 +290,40 @@ async function startFullMatch(guild, match) {
 
   await roomChannel.send({ embeds: [privateEmbed] }).catch(e => console.error('Failed to post room info:', e.message));
 
+  const publicChannel = guild.channels.cache.get(match.channelId);
+  if (publicChannel) {
+    try {
+      const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
+      match.mvpWinnerSet = false;
+      match.mvpLoserSet = false;
+      match.mvpWinnerId = null;
+      match.mvpLoserId = null;
+      match.winnerTeam = null;
+      match.loserTeam = null;
+      manager.persistMatches();
+
+      const mentions = allPlayers.map(id => `<@${id}>`).join(' ');
+      const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
+
+      const resultEmbed = new EmbedBuilder()
+        .setTitle(`🏆 Match Live - ${match.teamSize}v${match.teamSize}`)
+        .setColor(0xFFD700)
+        .setDescription('Captains (**first player of each team**) can vote the result below.\n\n**Awards:** Winner team `50` | Winner MVP `80` | Loser team `10` | Loser MVP `30`');
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`mvpwinner_${match.id}`).setLabel('🏆 MVP Winner').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`mvploser_${match.id}`).setLabel('💪 MVP Loser').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`staffreq_${match.id}`).setLabel('🛡️ Staff Request').setStyle(ButtonStyle.Secondary)
+      );
+
+      const boxMsg = await publicChannel.send({ content: `${mentions}\n${roleMentions}`, embeds: [resultEmbed], components: [row] });
+      match.resultMessageId = boxMsg.id;
+      manager.persistMatches();
+    } catch (e) {
+      console.error('Failed to post match result box:', e.message);
+    }
+  }
+
   return { team1Channel, team2Channel, roomChannel };
 }
 
@@ -433,6 +474,68 @@ async function cleanupOldMessages(channel) {
   }
 }
 
+async function teamPlayerSelectOptions(guild, teamIds) {
+  const options = [];
+  for (const uid of teamIds) {
+    const member = await guild.members.fetch(uid).catch(() => null);
+    const name = member ? (member.displayName || member.user.username) : uid;
+    options.push(new StringSelectMenuOptionBuilder().setLabel(name.slice(0, 90)).setValue(uid));
+  }
+  return options;
+}
+
+async function settleMatchResult(guild, match) {
+  const mode = match.mode || 'amo';
+  const winnerTeam = match.winnerTeam;
+  const loserTeam = match.loserTeam;
+  if (!winnerTeam || !loserTeam) return;
+
+  const winIds = winnerTeam === 1 ? match.team1 : match.team2;
+  const loseIds = loserTeam === 1 ? match.team1 : match.team2;
+
+  const lines = [];
+  for (const uid of winIds) {
+    const pts = uid === match.mvpWinnerId ? REWARDS.winnerMvp : REWARDS.winner;
+    storage.addPoints(uid, pts, 'win', mode);
+    lines.push(`🏆 <@${uid}> **+${pts}**`);
+  }
+  for (const uid of loseIds) {
+    const pts = uid === match.mvpLoserId ? REWARDS.loserMvp : REWARDS.loser;
+    storage.addPoints(uid, pts, 'loss', mode);
+    lines.push(`💪 <@${uid}> +${pts}`);
+  }
+
+  manager.logMatch({
+    id: match.id,
+    timestamp: Date.now(),
+    teamSize: match.teamSize,
+    roomId: match.roomId,
+    password: match.password,
+    team1: match.team1,
+    team2: match.team2,
+    winnerTeam,
+    loserTeam,
+    mvpWinnerId: match.mvpWinnerId,
+    mvpLoserId: match.mvpLoserId
+  });
+
+  const channel = guild.channels.cache.get(match.channelId);
+  if (channel && match.resultMessageId) {
+    const msg = await channel.messages.fetch(match.resultMessageId).catch(() => null);
+    if (msg) {
+      const resultEmbed = new EmbedBuilder()
+        .setTitle('✅ Match Finished!')
+        .setColor(0x00FF00)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: `Winner MVP <@${match.mvpWinnerId}> vs Loser MVP <@${match.mvpLoserId}>` });
+      await msg.edit({ embeds: [resultEmbed], components: [] }).catch(() => {});
+    }
+  }
+
+  await manager.finishMatch(guild, match);
+  applyRankNicknames(guild).catch(() => {});
+}
+
 async function performJoin(interaction, match, team) {
   const result = manager.joinTeam(match.id, interaction.user.id, team);
   if (!result.success) {
@@ -533,6 +636,65 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await performJoin(interaction, match, team);
   }
 
+  if (interaction.isStringSelectMenu()) {
+    const cid = interaction.customId;
+    let isWinner = null;
+    let matchId = null;
+    let team = null;
+
+    if (cid.startsWith('mvwteam_')) { isWinner = true; matchId = cid.slice('mvwteam_'.length); }
+    else if (cid.startsWith('mvlteam_')) { isWinner = false; matchId = cid.slice('mvlteam_'.length); }
+    else if (cid.startsWith('mvwplayer_')) {
+      isWinner = true;
+      const rest = cid.slice('mvwplayer_'.length);
+      const idx = rest.lastIndexOf('_');
+      matchId = rest.slice(0, idx);
+      team = rest.slice(idx + 1);
+    } else if (cid.startsWith('mvlplayer_')) {
+      isWinner = false;
+      const rest = cid.slice('mvlplayer_'.length);
+      const idx = rest.lastIndexOf('_');
+      matchId = rest.slice(0, idx);
+      team = rest.slice(idx + 1);
+    }
+    if (matchId === null) return;
+
+    const match = manager.getMatch(matchId);
+    if (!match) return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+
+    const selected = interaction.values[0];
+
+    if (team === null) {
+      const list = selected === '1' ? match.team1 : match.team2;
+      const opts = await teamPlayerSelectOptions(interaction.guild, list);
+      if (opts.length === 0) return interaction.update({ content: '⚠️ No players found on that team.', components: [] });
+      const playerSelect = new StringSelectMenuBuilder()
+        .setCustomId(`${isWinner ? 'mvwplayer' : 'mvlplayer'}_${match.id}_${selected}`)
+        .setPlaceholder(`Select the ${isWinner ? 'WINNER' : 'LOSER'} MVP`)
+        .addOptions(opts);
+      return interaction.update({
+        content: `${isWinner ? '🏆' : '💪'} Which player is the ${isWinner ? 'winner' : 'loser'} MVP on Team ${selected}?`,
+        components: [new ActionRowBuilder().addComponents(playerSelect)]
+      });
+    }
+
+    if (isWinner) {
+      match.winnerTeam = parseInt(team);
+      match.mvpWinnerId = selected;
+      match.mvpWinnerSet = true;
+    } else {
+      match.loserTeam = parseInt(team);
+      match.mvpLoserId = selected;
+      match.mvpLoserSet = true;
+    }
+    manager.persistMatches();
+    await interaction.update({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP selected: <@${selected}>`, components: [] });
+
+    if (match.mvpWinnerSet && match.mvpLoserSet) {
+      await settleMatchResult(interaction.guild, match);
+    }
+  }
+
   if (interaction.isButton()) {
     const separator = interaction.customId.indexOf('_');
     if (separator === -1) return interaction.reply({ content: '⚠️ Invalid interaction.', ephemeral: true });
@@ -606,6 +768,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
       keyModal.addComponents(keyRow);
 
       return interaction.showModal(keyModal);
+    }
+
+    if (action === 'mvpwinner' || action === 'mvploser') {
+      const isWinner = action === 'mvpwinner';
+      const captains = [match.team1[0], match.team2[0]].filter(Boolean);
+      if (!captains.includes(interaction.user.id)) {
+        return interaction.reply({ content: '❌ Only the **first player of each team** can vote!', ephemeral: true });
+      }
+      if (isWinner ? (match.mvpWinnerSet && match.mvpWinnerId) : (match.mvpLoserSet && match.mvpLoserId)) {
+        return interaction.reply({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already voted.`, ephemeral: true });
+      }
+      const teamSelect = new StringSelectMenuBuilder()
+        .setCustomId(`${isWinner ? 'mvwteam' : 'mvlteam'}_${match.id}`)
+        .setPlaceholder(`Select the ${isWinner ? 'WINNING' : 'LOSING'} team`)
+        .addOptions(
+          new StringSelectMenuOptionBuilder().setLabel('🔴 Team 1').setDescription(`Players: ${match.team1.length}`).setValue('1'),
+          new StringSelectMenuOptionBuilder().setLabel('🔴 Team 2').setDescription(`Players: ${match.team2.length}`).setValue('2')
+        );
+      return interaction.reply({
+        content: `${isWinner ? '🏆' : '💪'} Select the ${isWinner ? 'winning' : 'losing'} team:`,
+        components: [new ActionRowBuilder().addComponents(teamSelect)],
+        ephemeral: true
+      });
+    }
+
+    if (action === 'staffreq') {
+      const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
+      if (!allPlayers.includes(interaction.user.id)) {
+        return interaction.reply({ content: '❌ Only players in this match can request staff!', ephemeral: true });
+      }
+      const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
+      await interaction.reply({
+        content: `🛡️ **Staff Request** from <@${interaction.user.id}> for Match ${match.teamSize}v${match.teamSize}.\n${roleMentions}`,
+        ephemeral: false
+      });
+      return;
     }
 
     if (action === 'leave') {
