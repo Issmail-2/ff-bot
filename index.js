@@ -10,6 +10,7 @@ if (!config.matchPoints) config.matchPoints = { winner: 80, loser: 30 };
 if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705>', team1:'<a:aHYPR_GREENDOTid:1545351146770796634>', team2:'<a:aredptid:1545350890989428829>' };
 if (!config.pointsFile) config.pointsFile = './data/points.json';
 if (!config.logsCategoryId) config.logsCategoryId = config.modes.amo.logsCategoryId;
+if (!config.logsChannelId) config.logsChannelId = process.env.LOGS_CHANNEL_ID || '1545366915180924938';
 if (!config.voiceCategoryId) config.voiceCategoryId = config.modes.amo.voiceCategoryId;
 if (!config.requiredVoiceChannels) {
   config.requiredVoiceChannels = [
@@ -516,6 +517,72 @@ async function teamPlayerSelectOptions(guild, teamIds) {
   return options;
 }
 
+async function dumpMatchChat(guild, match) {
+  const logChannel = guild.channels.cache.get(config.logsChannelId);
+  const room = guild.channels.cache.get(match.channelId2);
+  if (!logChannel || !room) {
+    console.log('[DUMP] no log channel or room channel');
+    return;
+  }
+
+  let prevBatch = undefined;
+  let all = [];
+  for (let i = 0; i < 15; i++) {
+    const batch = await room.messages.fetch(prevBatch ? { limit: 100, before: prevBatch.last().id } : { limit: 100 }).catch(() => null);
+    if (!batch || batch.size === 0) break;
+    all.push(...batch.values());
+    prevBatch = batch;
+    if (batch.size < 100) break;
+  }
+  all.reverse();
+
+  const ts = Date.now();
+  const dateStr = new Date(ts).toLocaleString('en-GB', { timeZone: 'UTC' });
+
+  let text = '';
+  text += `Free Fire Match Log\n`;
+  text += `Match: ${match.teamSize}v${match.teamSize}${match.mode ? ' (' + getModeConfig(match.mode).displayName + ')' : ''}\n`;
+  text += `Finished at: ${dateStr} (UTC)\n`;
+  text += `Team 1: ${(match.team1 || []).map(id => `<@${id}>`).join(' ') || '—'}\n`;
+  text += `Team 2: ${(match.team2 || []).map(id => `<@${id}>`).join(' ') || '—'}\n`;
+  text += `Winner Team: ${match.winnerTeam ? 'Team ' + match.winnerTeam : '—'} | MVP Winner: <@${match.mvpWinnerId || '—'}>\n`;
+  text += `Loser Team: ${match.loserTeam ? 'Team ' + match.loserTeam : '—'} | MVP Loser: <@${match.mvpLoserId || '—'}>\n`;
+  text += `\n===== CHAT LOG =====\n`;
+
+  for (const m of all) {
+    if (m.type === 7) continue;
+    const author = m.author;
+    const name = author ? (author.username || author.tag || 'unknown') : 'unknown';
+    const mt = m.member ? (m.member.displayName || author.username) : name;
+    const t = new Date(m.createdTimestamp).toLocaleString('en-GB', { timeZone: 'UTC' });
+    let content = m.content;
+    if (!content && m.embeds && m.embeds.length) {
+      const e = m.embeds[0];
+      content = `[embed] ${e.title || ''} ${e.description || ''}`.trim();
+    }
+    if (!content && m.attachments && m.attachments.size) {
+      content = '[attachment]';
+    }
+    if (!content) content = '';
+    text += `[${t}] ${mt} (${name}): ${content}\n`;
+  }
+
+  const buffer = Buffer.from(text, 'utf8');
+  const chatFile = { attachment: buffer, name: `match-${match.id.slice(-5)}-chat.txt` };
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📜 Match Log - ${match.teamSize}v${match.teamSize}`)
+    .setColor(0x00FF00)
+    .setDescription(
+      `Match finished **<t:${Math.floor(ts / 1000)}:F>**\n` +
+      `🏆 Winner Team: ${match.winnerTeam ? `Team ${match.winnerTeam}` : '—'} | MVP Winner: <@${match.mvpWinnerId || '—'}>\n` +
+      `💪 Loser Team: ${match.loserTeam ? `Team ${match.loserTeam}` : '—'} | MVP Loser: <@${match.mvpLoserId || '—'}>\n` +
+      `💬 Full chat log below ⬇️`
+    );
+
+  await logChannel.send({ embeds: [embed], files: [chatFile] }).catch(e => console.log('[DUMP] send failed:', e.message));
+}
+
 async function settleMatchResult(guild, match) {
   const mode = match.mode || 'amo';
   const winnerTeam = match.winnerTeam;
@@ -563,6 +630,8 @@ async function settleMatchResult(guild, match) {
       await msg.edit({ embeds: [resultEmbed], components: [] }).catch(() => {});
     }
   }
+
+  await dumpMatchChat(guild, match);
 
   await manager.finishMatch(guild, match);
   applyRankNicknames(guild).catch(() => {});
@@ -1165,6 +1234,8 @@ client.on(Events.MessageCreate, async (message) => {
         winnerId: doneMatch.winnerId,
         loserId: doneMatch.loserId
       });
+
+      await dumpMatchChat(message.guild, doneMatch);
 
       await manager.finishMatch(message.guild, doneMatch);
       applyRankNicknames(message.guild).catch(() => {});

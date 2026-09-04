@@ -398,7 +398,7 @@ async function returnPlayersToOriginal(guild, match) {
 async function finishMatch(guild, match) {
   await returnPlayersToOriginal(guild, match);
   await deleteVoiceChannels(guild, match);
-  await archiveChannel(guild, match);
+  await deleteChannel(guild, match);
   removeMatch(match.id);
 }
 
