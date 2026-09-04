@@ -34,6 +34,7 @@ if (!config.matchRewards) {
 const REWARDS = config.matchRewards;
 const storage = require('./utils/storage');
 const manager = require('./utils/matchManager');
+const blacklistModule = require('./utils/blacklist');
 
 const client = new Client({
   intents: [
@@ -87,6 +88,24 @@ function canAddPoints(member) {
   if (config.pointsRoles.some(id => id && member.roles.cache.has(id))) return true;
   if (config.pointsUsers.includes(member.id)) return true;
   return false;
+}
+
+function parseDuration(str) {
+  if (!str) return null;
+  const s = str.trim().toLowerCase();
+  if (s === '0' || s === 'perm' || s === 'permanent') return -1;
+  const m = s.match(/^(\d+)([a-z]*)$/);
+  if (!m) return null;
+  const n = parseInt(m[1]);
+  const unit = m[2] || 'm';
+  const mult = { s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000, mo: 2629800000, y: 31536000000 }[unit];
+  if (!mult) return null;
+  return n * mult;
+}
+
+function blacklistMessage(entry) {
+  const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
+  return `❌ **You are blacklisted** from hosting or joining matches.\n📋 Reason: ${entry.reason}\n⏳ Expires: ${expiry}`;
 }
 
 async function stripRankNicknames(guild) {
@@ -412,6 +431,11 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(voiceCheckMessage());
     }
 
+    const bl = blacklistModule.isBlacklisted(message.author.id);
+    if (bl) {
+      return message.reply(blacklistMessage(bl));
+    }
+
     await cleanupOldMessages(message.channel);
 
     const match = manager.createMatch(message.author.id, teamSize, message.channel.id, mode);
@@ -545,6 +569,10 @@ async function settleMatchResult(guild, match) {
 }
 
 async function performJoin(interaction, match, team) {
+  const bl = blacklistModule.isBlacklisted(interaction.user.id);
+  if (bl) {
+    return interaction.reply({ content: blacklistMessage(bl), ephemeral: true });
+  }
   const result = manager.joinTeam(match.id, interaction.user.id, team);
   if (!result.success) {
     return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
@@ -1004,6 +1032,40 @@ client.on(Events.MessageCreate, async (message) => {
     await manager.deleteChannel(message.guild, existing);
     manager.removeMatch(existing.id);
     await message.reply(`❌ Cancelled <@${target.id}>'s match!`);
+  } else if (content.startsWith('!blacklist')) {
+    const isAdmin = message.member.permissions.has('Administrator');
+    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
+    if (!isAdmin && !hasRole) {
+      return message.reply('❌ Only supervisors/admins can blacklist users!');
+    }
+    const args = message.content.trim().split(/\s+/);
+    if (args.length < 4) {
+      return message.reply('Usage: `!blacklist <userId> <duration> <reason>`\nDurations: `30m`, `5h`, `7d`, `2w`, `perm`');
+    }
+    const userId = args[1];
+    if (!/^\d{15,20}$/.test(userId)) {
+      return message.reply('❌ Invalid user ID.');
+    }
+    const durationMs = parseDuration(args[2]);
+    if (durationMs === null) {
+      return message.reply('❌ Invalid duration. Use e.g. `30m`, `5h`, `7d`, `2w`, or `perm`.');
+    }
+    const reason = args.slice(3).join(' ');
+    const entry = blacklistModule.blacklistUser(userId, durationMs === -1 ? null : durationMs, reason, message.author.id);
+    const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
+    await message.reply(`✅ <@${userId}> has been blacklisted!\n📋 Reason: ${reason}\n⏳ Expires: ${expiry}`);
+  } else if (content.startsWith('!unblacklist')) {
+    const isAdmin = message.member.permissions.has('Administrator');
+    const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
+    if (!isAdmin && !hasRole) {
+      return message.reply('❌ Only supervisors/admins can unblacklist users!');
+    }
+    const args = message.content.trim().split(/\s+/);
+    if (args.length < 2) {
+      return message.reply('Usage: `!unblacklist <userId>`');
+    }
+    const removed = blacklistModule.unblacklistUser(args[1]);
+    await message.reply(removed ? `✅ <@${args[1]}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
   } else if (content.startsWith('!setranks')) {
     const isAdmin = message.member.permissions.has('Administrator');
     const hasRole = config.supervisorRoleId && message.member.roles.cache.has(config.supervisorRoleId);
