@@ -295,8 +295,10 @@ async function startFullMatch(guild, match) {
   if (roomChat) {
     try {
       const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
-      match.mvpWinnerSet = false;
-      match.mvpLoserSet = false;
+      match.winnerVotes = {};
+      match.loserVotes = {};
+      match.winnerVoteSet = false;
+      match.loserVoteSet = false;
       match.mvpWinnerId = null;
       match.mvpLoserId = null;
       match.winnerTeam = null;
@@ -473,6 +475,11 @@ async function cleanupOldMessages(channel) {
   } catch (e) {
     console.log('Cleanup error:', e.message);
   }
+}
+
+async function getPlayerName(guild, userId) {
+  const m = await guild.members.fetch(userId).catch(() => null);
+  return m ? (m.displayName || m.user.username) : userId;
 }
 
 async function teamPlayerSelectOptions(guild, teamIds) {
@@ -682,20 +689,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    if (isWinner) {
-      match.winnerTeam = parseInt(team);
-      match.mvpWinnerId = selected;
-      match.mvpWinnerSet = true;
-    } else {
-      match.loserTeam = parseInt(team);
-      match.mvpLoserId = selected;
-      match.mvpLoserSet = true;
+    const voterId = interaction.user.id;
+    const captains = [match.team1[0], match.team2[0]].filter(Boolean);
+    if (!captains.includes(voterId)) {
+      return interaction.update({ content: '❌ Only the first player of each team can vote!', components: [] });
     }
-    manager.persistMatches();
-    await interaction.update({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP selected: <@${selected}>`, components: [] });
+    const otherId = voterId === match.team1[0] ? match.team2[0] : match.team1[0];
 
-    if (match.mvpWinnerSet && match.mvpLoserSet) {
-      await settleMatchResult(interaction.guild, match);
+    const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
+    match[votesKey][voterId] = { team: parseInt(team), player: selected };
+    manager.persistMatches();
+
+    const myVote = match[votesKey][voterId];
+    const otherVote = otherId ? match[votesKey][otherId] : null;
+
+    if (otherVote && otherVote.team === myVote.team && otherVote.player === myVote.player) {
+      if (isWinner) {
+        match.winnerTeam = myVote.team;
+        match.mvpWinnerId = myVote.player;
+        match.winnerVoteSet = true;
+      } else {
+        match.loserTeam = myVote.team;
+        match.mvpLoserId = myVote.player;
+        match.loserVoteSet = true;
+      }
+      manager.persistMatches();
+      await interaction.update({ content: `✅ Both captains agree! ${isWinner ? '🏆 Winner' : '💪 Loser'} MVP: <@${myVote.player}>`, components: [] });
+      if (match.winnerVoteSet && match.loserVoteSet) {
+        await settleMatchResult(interaction.guild, match);
+      }
+    } else if (otherVote) {
+      match[votesKey] = {};
+      manager.persistMatches();
+      await interaction.update({ content: `❌ Votes aren't the same, please try again!`, components: [] });
+      interaction.channel.send({ content: `❌ **${isWinner ? 'Winner' : 'Loser'} votes aren't the same, please try again!** (captains <@${match.team1[0]}> & <@${match.team2[0]}>)` }).catch(() => {});
+    } else {
+      const otherName = otherId ? await getPlayerName(interaction.guild, otherId) : 'the other captain';
+      await interaction.update({ content: `✅ Vote saved! Waiting for **${otherName}** to vote.`, components: [] });
     }
   }
 
@@ -783,8 +813,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!captains.includes(interaction.user.id)) {
         return interaction.reply({ content: '❌ Only the **first player of each team** can vote!', ephemeral: true });
       }
-      if (isWinner ? (match.mvpWinnerSet && match.mvpWinnerId) : (match.mvpLoserSet && match.mvpLoserId)) {
-        return interaction.reply({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already voted.`, ephemeral: true });
+      if (isWinner ? match.winnerVoteSet : match.loserVoteSet) {
+        return interaction.reply({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already finalized.`, ephemeral: true });
+      }
+      const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
+      if ((match[votesKey] || {})[interaction.user.id]) {
+        return interaction.reply({ content: '✅ You already voted! Waiting for the other captain to vote.', ephemeral: true });
       }
       const teamSelect = new StringSelectMenuBuilder()
         .setCustomId(`${isWinner ? 'mvwteam' : 'mvlteam'}_${match.id}`)
@@ -806,13 +840,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: '❌ Only players in this match can request staff!', ephemeral: true });
       }
       const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
-      const publicChannel = guild.channels.cache.get(match.channelId);
+      await interaction.deferReply({ ephemeral: true });
+      const publicChannel = interaction.guild.channels.cache.get(match.channelId);
       const staffMsg = `🛡️ **Staff Request** from <@${interaction.user.id}> for Match ${match.teamSize}v${match.teamSize}.\n${roleMentions}`;
-      if (publicChannel) {
-        await publicChannel.send({ content: staffMsg }).catch(() => {});
-        await interaction.reply({ content: '✅ Staff has been notified!', ephemeral: true });
-      } else {
-        await interaction.reply({ content: staffMsg, ephemeral: true });
+      try {
+        if (publicChannel) {
+          await publicChannel.send({ content: staffMsg, allowedMentions: { roles: (config.staffRoles || []), users: [] } });
+        } else {
+          await interaction.channel.send({ content: staffMsg, allowedMentions: { roles: (config.staffRoles || []), users: [] } });
+        }
+        await interaction.editReply({ content: '✅ Staff has been notified!' });
+      } catch (e) {
+        console.log('[STAFF] send failed:', e.message);
+        await interaction.editReply({ content: staffMsg });
       }
       return;
     }
