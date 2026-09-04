@@ -4,6 +4,8 @@
   "voiceCategoryId": "1545316338145165332",
   "pointsFile": "./data/points.json",
   "supervisorRoleId": "1506540916519731310",
+  "pointsRoles": ["1450212500581646460"],
+  "pointsUsers": ["1177600499298599035"],
   "logsCategoryId": "1545364636034138112",
   "modes": {
     "amo": {

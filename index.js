@@ -19,6 +19,12 @@ if (!config.requiredVoiceChannels) {
     process.env.REQUIRED_VOICE_CHANNEL_4 || '1495304629322518635'
   ];
 }
+if (!config.pointsRoles) {
+  config.pointsRoles = process.env.POINTS_ROLE_IDS ? process.env.POINTS_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460'];
+}
+if (!config.pointsUsers) {
+  config.pointsUsers = process.env.POINTS_USER_IDS ? process.env.POINTS_USER_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1177600499298599035'];
+}
 const storage = require('./utils/storage');
 const manager = require('./utils/matchManager');
 
@@ -67,6 +73,13 @@ function isInRequiredVoice(member) {
 function voiceCheckMessage() {
   const list = config.requiredVoiceChannels.map(id => `<#${id}>`).join(', ');
   return `❌ To host or join a match you must be inside one of the lobby voice channels: ${list}`;
+}
+
+function canAddPoints(member) {
+  if (member.permissions.has('Administrator')) return true;
+  if (config.pointsRoles.some(id => id && member.roles.cache.has(id))) return true;
+  if (config.pointsUsers.includes(member.id)) return true;
+  return false;
 }
 
 async function applyRankNicknames(guild) {
@@ -614,10 +627,11 @@ const adminCommands = {
     }
     storage.resetAllPoints(mode);
     await message.reply(`🔄 All ${getModeConfig(mode).displayName} points have been reset!`);
+    applyRankNicknames(message.guild).catch(() => {});
   },
   setpoints: async (message, mode = 'amo') => {
-    if (!message.member.permissions.has('Administrator')) {
-      return message.reply('❌ Only admins can adjust points!');
+    if (!canAddPoints(message.member)) {
+      return message.reply('❌ You don\'t have permission to adjust points!');
     }
     const args = message.content.split(/\s+/);
     if (args.length < 4) return message.reply('Usage: `!setpoints @user points type (win/loss)`');
@@ -631,6 +645,7 @@ const adminCommands = {
     const type = (args[3] || 'win').toLowerCase() === 'loss' ? 'loss' : 'win';
     const result = storage.addPoints(user.id, points, type, mode);
     await message.reply(`✅ Added **${points}** points to <@${user.id}>. Total: **${result.totalPoints}**`);
+    applyRankNicknames(message.guild).catch(() => {});
   }
 };
 
