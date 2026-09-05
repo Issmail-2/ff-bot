@@ -241,8 +241,28 @@ Remove items: \`&storeremove <itemId>\`
 ⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\`
 💠 Store: \`role\` items auto-grant the role, \`diamond\` items notify staff to deliver.`;
 
+function buildInfoEmbeds() {
+  const MAX = 4000;
+  const parts = [];
+  let cur = '';
+  for (const line of COMMANDS_INFO.split('\n')) {
+    if ((cur + '\n' + line).length > MAX) {
+      parts.push(cur);
+      cur = line;
+    } else {
+      cur = cur ? cur + '\n' + line : line;
+    }
+  }
+  if (cur) parts.push(cur);
+  return parts.map((p, i) => new EmbedBuilder()
+    .setColor(0xFFA500)
+    .setTitle(i === 0 ? '🎮 HOW TO USE THE BOT - FREE FIRE MATCHES' : null)
+    .setDescription(p));
+}
+
 async function sendCommandsInfo(channel) {
   if (!channel) return null;
+  const embeds = buildInfoEmbeds();
   let recent;
   try {
     recent = await channel.messages.fetch({ limit: 20 });
@@ -251,14 +271,15 @@ async function sendCommandsInfo(channel) {
     return null;
   }
   if (recent) {
-    const old = recent.filter(m => m.author.id === client.user.id && m.content.includes('HOW TO USE THE BOT - FREE FIRE MATCHES'));
-    for (const m of old.values()) {
-      if (m.content === COMMANDS_INFO) return null;
+    const mine = recent.filter(m => m.author.id === client.user.id && m.embeds && m.embeds[0] && m.embeds[0].title && m.embeds[0].title.includes('HOW TO USE THE BOT'));
+    for (const m of mine.values()) {
+      const same = m.embeds.length === embeds.length && embeds.every((e, i) => e.data.description === m.embeds[i].description);
+      if (same) return null;
       await m.delete().catch(() => {});
     }
   }
   try {
-    const sent = await channel.send(COMMANDS_INFO);
+    const sent = await channel.send({ embeds });
     console.log(`[INFO] Commands message posted to ${channel.id}`);
     return sent;
   } catch (e) {
