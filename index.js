@@ -1701,16 +1701,47 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-  const leftVoice = oldState.channelId && !newState.channelId;
-  if (!leftVoice) return;
-  if (manager.isSuppressed(oldState.member.id)) return;
-  const match = manager.getActiveMatchForPlayer(oldState.member.id);
-  if (!match) return;
-  const leftTeamChannel = match.voiceChannels.includes(oldState.channelId);
-  if (!leftTeamChannel) return;
+client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  const member = oldState.member || newState.member;
+  if (!member || member.user.bot) return;
+  if (manager.isSuppressed(member.id)) return;
+  const match = manager.getActiveMatchForPlayer(member.id);
+  if (!match || match.closing) return;
 
-  oldState.member.send('⚠️ **You left the match voice channel!** Please come back to your team voice channel. The match is still in progress.').catch(() => {});
+  const teamIdx = (match.team1 || []).includes(member.id) ? 0 : 1;
+  const targetVoice = match.voiceChannels && match.voiceChannels[teamIdx];
+
+  const leftVoice = oldState.channelId && !newState.channelId;
+  const switchedChannel = targetVoice && newState.channelId && newState.channelId !== targetVoice;
+
+  if (switchedChannel) {
+    const fresh = await newState.guild.members.fetch(member.id).catch(() => null);
+    const target = newState.guild.channels.cache.get(targetVoice);
+    const origin = newState.guild.channels.cache.get(oldState.channelId);
+    if (fresh && target && origin && origin.id !== target.id && (!match.originalChannels || match.originalChannels[member.id] !== newState.channelId)) {
+      await fresh.voice.setChannel(targetVoice).catch(() => {});
+    }
+    return;
+  }
+
+  if (leftVoice) {
+    const leftTeamChannel = match.voiceChannels.includes(oldState.channelId);
+    if (!leftTeamChannel) return;
+    match.voiceViolations = match.voiceViolations || {};
+    match.voiceViolations[member.id] = (match.voiceViolations[member.id] || 0) + 1;
+    const count = match.voiceViolations[member.id];
+    const leftOf = 3 - count;
+    manager.persistMatches();
+    await member.send(`⚠️ **Voice Warning (${count}/3)** — you left the match voice channel! The match is still in progress.${leftOf > 0 ? ` Leaving the voice ${leftOf} more time(s) will get you **blacklisted for 30 minutes**.` : ''}`).catch(() => {});
+    const room = member.guild.channels.cache.get(match.channelId2);
+    if (room) room.send(`⚠️ <@${member.id}> left the match voice (**${count}/3**).`).catch(() => {});
+    if (count >= 3) {
+      blacklistModule.blacklistUser(member.id, 30 * 60 * 1000, 'Left the match voice 3 times', client.user.id);
+      await member.send('⛔ **You have been blacklisted for 30 minutes** for leaving the match voice 3 times.').catch(() => {});
+      if (room) room.send(`⛔ <@${member.id}> has been **blacklisted for 30 minutes** for leaving the match voice 3 times.`).catch(() => {});
+    }
+    return;
+  }
 });
 
 client.login(config.token);

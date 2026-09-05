@@ -397,6 +397,7 @@ async function returnPlayersToOriginal(guild, match) {
 }
 
 async function finishMatch(guild, match) {
+  match.closing = true;
   await returnPlayersToOriginal(guild, match);
   await deleteVoiceChannels(guild, match);
   await deleteChannel(guild, match);
@@ -405,6 +406,7 @@ async function finishMatch(guild, match) {
 
 async function deleteVoiceChannels(guild, match) {
   const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
+  match.closing = true;
   suppressUsers(allPlayers);
   for (const channelId of match.voiceChannels) {
     try {
