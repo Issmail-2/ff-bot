@@ -1423,7 +1423,7 @@ client.on(Events.MessageCreate, async (message) => {
       .setColor(0xFFA500);
     const fields = items.map(it => ({
       name: `${it.type === 'role' ? '👑' : '💎'} ${it.name}`,
-      value: `Cost: **${it.cost} pts**${it.type === 'role' && it.roleId ? ` -> <@&${it.roleId}>` : ' (staff delivery)'}`,
+      value: `Cost: **${it.cost} pts**\nID: \`${it.id}\`${it.type === 'role' && it.roleId ? ` -> <@&${it.roleId}>` : ''}`,
       inline: false
     }));
     embed.addFields(fields);
