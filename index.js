@@ -352,13 +352,15 @@ function computeCombinedRanking() {
     try { data = storage.loadPoints(mode); } catch (e) { data = null; }
     if (!data || !data.players) continue;
     for (const [uid, p] of Object.entries(data.players)) {
-      if (!combined[uid]) combined[uid] = { totalPoints: 0 };
+      if (!combined[uid]) combined[uid] = { totalPoints: 0, wins: 0, matchesPlayed: 0 };
       combined[uid].totalPoints += (p.totalPoints || 0);
+      combined[uid].wins += (p.wins || 0);
+      combined[uid].matchesPlayed += (p.matchesPlayed || 0);
     }
   }
   return Object.entries(combined)
-    .filter(([, p]) => p.totalPoints > 0)
-    .sort((a, b) => b[1].totalPoints - a[1].totalPoints);
+    .filter(([, p]) => p.matchesPlayed > 0 || p.totalPoints > 0)
+    .sort((a, b) => b[1].totalPoints - a[1].totalPoints || b[1].wins - a[1].wins || b[1].matchesPlayed - a[1].matchesPlayed);
 }
 
 async function applyRankOneRole(guild, ranked) {
@@ -381,16 +383,33 @@ async function applyRankOneRole(guild, ranked) {
   }
 }
 
+async function renameWithRetry(member, nick, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await member.setNickname(nick);
+      return true;
+    } catch (e) {
+      if (e.status === 429 && e.retryAfter) {
+        await new Promise(r => setTimeout(r, Math.min(e.retryAfter * 1000 + 500, 65000)));
+        continue;
+      }
+      throw e;
+    }
+  }
+  return false;
+}
+
 async function applyRankNicknames(guild) {
   const ranked = computeCombinedRanking();
 
   let done = 0;
   let failed = 0;
+  const members = await guild.members.fetch().catch(() => null);
   for (let i = 0; i < ranked.length; i++) {
     const [uid] = ranked[i];
     const rank = i + 1;
     try {
-      const member = await guild.members.fetch(uid).catch(() => null);
+      const member = guild.members.cache.get(uid) || (members && members.get(uid));
       if (!member || member.user.bot) continue;
       const currentNick = member.nickname || '';
       const isRankNick = /^Rank\s+\d+\s+/i.test(currentNick);
@@ -400,15 +419,17 @@ async function applyRankNicknames(guild) {
       ).replace(/^Rank\s+\d+\s*/i, '');
       const newNick = (`Rank ${rank} ${base}`).slice(0, 32);
       if (member.nickname !== newNick) {
-        await member.setNickname(newNick).catch(e => {
+        const ok = await renameWithRetry(member, newNick);
+        if (!ok) {
           failed++;
-          console.log(`[RANK] cannot rename ${uid} (${base}): ${e.message}`);
-        });
+          console.log(`[RANK] cannot rename ${uid} (${base}) after retries`);
+        }
       }
       done++;
-      await new Promise(r => setTimeout(r, 1200));
-    } catch {
+      await new Promise(r => setTimeout(r, 1800));
+    } catch (e) {
       failed++;
+      console.log(`[RANK] rename error for ${uid}: ${e.message}`);
     }
   }
   await applyRankOneRole(guild, ranked);
