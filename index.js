@@ -11,7 +11,8 @@ if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705
 if (!config.pointsFile) config.pointsFile = './data/points.json';
 if (!config.logsCategoryId) config.logsCategoryId = config.modes.amo.logsCategoryId;
 if (!config.logsChannelId) config.logsChannelId = process.env.LOGS_CHANNEL_ID || '1545366915180924938';
-if (!config.infoChannelId) config.infoChannelId = process.env.INFO_CHANNEL_ID || '1535807851807899769';
+if (!config.infoChannelId) config.infoChannelId = process.env.INFO_CHANNEL_ID || '1545379695363620874';
+if (!config.rankOneRoleId) config.rankOneRoleId = process.env.RANK_ONE_ROLE_ID || '';
 if (!config.voiceCategoryId) config.voiceCategoryId = config.modes.amo.voiceCategoryId;
 if (!config.requiredVoiceChannels) {
   config.requiredVoiceChannels = [
@@ -48,6 +49,7 @@ const storage = require('./utils/storage');
 const manager = require('./utils/matchManager');
 const blacklistModule = require('./utils/blacklist');
 const jailModule = require('./utils/jail');
+const storeModule = require('./utils/store');
 
 const client = new Client({
   intents: [
@@ -193,13 +195,30 @@ async function unjailMember(guild, member, role, affected) {
   }
 }
 
-const COMMANDS_INFO = `📋 **BOT COMMANDS & PERMISSIONS**
+const COMMANDS_INFO = `🎮 **HOW TO USE THE BOT - FREE FIRE MATCHES**
 ━━━━━━━━━━━━━━━━━━━━━━━━
+1️⃣ Join one of the **lobby voice channels**.
+2️⃣ Host a match: type \`!play 2v2\`, \`!play 3v3\` or \`!play 4v4\` (in the matches channel), or \`!esport 2v2/3v3/4v4\` in the esport channel.
+3️⃣ Click **🏠 Room Config**, enter the Room ID / Password (and an optional join key).
+4️⃣ Players join Team 1 / Team 2 with the join buttons (key required if the host set one).
+5️⃣ When both teams are full, a **result box** appears - the 2 team captains vote the **MVP** for winner and loser.
+6️⃣ Points are added automatically: Winner +50, Winner MVP +80, Loser +10, Loser MVP +30.
+7️⃣ Check ranks with the **Rank #** nicknames or \`!leaderboard\`.
 
+👑 **RANK #1 PRIZE - AUTO ROLE**
+The **#1 ranked player** automatically receives the Rank #1 role!
+
+🛒 **STORE**
+\`&store\` - open the store and exchange your **points** for roles or Free Fire diamonds if you buy them, staff will deliver them to you.
+Supervisors add items: \`&storeadd <name>|<cost>|<role|diamond>|<roleId (role only)>\`
+Remove items: \`&storeremove <itemId>\`
+
+━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
 \`!play 2v2 | 3v3 | 4v4\` - host a match
 \`!esport 2v2 | 3v3 | 4v4\` - host an esport match
 \`!leaderboard\` - show the top players
+\`&store\` - open the reward store
 
 🔧 **SUPERVISORS / ADMINS** (<@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310>)
 \`!setpoints @user points win/loss\` - adjust a player's points (also: <@&1450212500581646460> and <@1177600499298599035>)
@@ -209,6 +228,9 @@ const COMMANDS_INFO = `📋 **BOT COMMANDS & PERMISSIONS**
 \`!setranks\` - refresh rank nicknames
 \`!resetvote\` - reset the vote and refund points
 \`&clear <n>\` - delete up to 100 messages (1-100)
+\`&commands\` - repost this commands list
+\`&storeadd <name>|<cost>|<role|diamond>|<roleId>\` - add a store item
+\`&storeremove <id>\` - remove a store item
 \`&blacklist <userID> <duration> <reason>\` - blacklist a player from matches
 \`&unblacklist <userID>\` - unblacklist a player
 
@@ -216,7 +238,8 @@ const COMMANDS_INFO = `📋 **BOT COMMANDS & PERMISSIONS**
 \`&jail <userID> <duration> <reason>\` - lock a player to the jail channels
 \`&unjail <userID>\` - release a jailed player
 
-⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\``;
+⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\`
+💠 Store: \`role\` items auto-grant the role, \`diamond\` items notify staff to deliver.`;
 
 async function sendCommandsInfo(channel) {
   if (!channel) return null;
@@ -270,7 +293,7 @@ async function stripRankNicknames(guild) {
   return done;
 }
 
-async function applyRankNicknames(guild) {
+function computeCombinedRanking() {
   const combined = {};
   for (const mode of ['amo', 'esport']) {
     let data = null;
@@ -281,9 +304,33 @@ async function applyRankNicknames(guild) {
       combined[uid].totalPoints += (p.totalPoints || 0);
     }
   }
-  const ranked = Object.entries(combined)
+  return Object.entries(combined)
     .filter(([, p]) => p.totalPoints > 0)
     .sort((a, b) => b[1].totalPoints - a[1].totalPoints);
+}
+
+async function applyRankOneRole(guild, ranked) {
+  const roleId = config.rankOneRoleId;
+  if (!roleId || !guild) return;
+  const role = guild.roles.cache.get(roleId);
+  if (!role) return;
+  if (!ranked || ranked.length === 0) return;
+  const top = ranked[0][0];
+  const members = await guild.members.fetch().catch(() => null);
+  if (!members) return;
+  for (const m of members.values()) {
+    if (m.id === top) continue;
+    if (m.roles.cache.has(roleId)) await m.roles.remove(role).catch(() => {});
+  }
+  const topMember = members.get(top);
+  if (topMember && !topMember.roles.cache.has(roleId)) {
+    await topMember.roles.add(role).catch(() => {});
+    console.log(`[RANK1] rank #1 role assigned to ${top}`);
+  }
+}
+
+async function applyRankNicknames(guild) {
+  const ranked = computeCombinedRanking();
 
   let done = 0;
   let failed = 0;
@@ -312,6 +359,7 @@ async function applyRankNicknames(guild) {
       failed++;
     }
   }
+  await applyRankOneRole(guild, ranked);
   return { done, failed };
 }
 
@@ -539,6 +587,9 @@ client.once(Events.ClientReady, (c) => {
   if (infoChannel) sendCommandsInfo(infoChannel).then(sent => {
     if (sent) console.log('[INFO] Commands message posted');
   });
+  const guild = c.guilds.cache.first();
+  const ranked = computeCombinedRanking();
+  if (guild && ranked.length) applyRankOneRole(guild, ranked).catch(() => {});
 });
 
 setInterval(async () => {
@@ -845,6 +896,43 @@ async function performJoin(interaction, match, team) {
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (interaction.isStringSelectMenu() && interaction.customId === 'store_menu') {
+    const mode = getModeByChannel(interaction.channel.id);
+    const item = storeModule.getItems().find(i => i.id === interaction.values[0]);
+    if (!item) {
+      return interaction.reply({ content: '❌ That item no longer exists.', ephemeral: true });
+    }
+    const balance = storage.getPlayerPoints(interaction.user.id, mode).totalPoints;
+    if (balance < item.cost) {
+      return interaction.reply({ content: `❌ Not enough points! You have **${balance} pts**, this item costs **${item.cost} pts**.`, ephemeral: true });
+    }
+    if (item.type === 'role') {
+      const role = interaction.guild.roles.cache.get(item.roleId);
+      if (!role) {
+        return interaction.reply({ content: '❌ The role for this item no longer exists. Ask a supervisor.', ephemeral: true });
+      }
+      storage.adjustPoints(interaction.user.id, -item.cost, mode);
+      const granted = await interaction.member.roles.add(role).then(() => true).catch(() => false);
+      if (!granted) {
+        storage.adjustPoints(interaction.user.id, item.cost, mode);
+        return interaction.reply({ content: '❌ Could not grant the role. Points refunded.', ephemeral: true });
+      }
+      storeModule.logPurchase({ id: `${Date.now()}_${interaction.user.id}`, userId: interaction.user.id, itemId: item.id, itemName: item.name, cost: item.cost, type: item.type, roleId: item.roleId, mode, claimed: true, at: Date.now() });
+      applyRankOneRole(interaction.guild, computeCombinedRanking()).catch(() => {});
+      return interaction.reply({ content: `✅ Purchased **${item.name}**! Spent **${item.cost} pts**. Role <@&${item.roleId}> granted.`, ephemeral: true });
+    }
+    storage.adjustPoints(interaction.user.id, -item.cost, mode);
+    storeModule.logPurchase({ id: `${Date.now()}_${interaction.user.id}`, userId: interaction.user.id, itemId: item.id, itemName: item.name, cost: item.cost, type: item.type, mode, claimed: false, at: Date.now() });
+    const staffChannel = interaction.guild.channels.cache.get(config.logsChannelId);
+    if (staffChannel) {
+      const staffMention = config.staffRoles.length ? config.staffRoles.map(id => `<@&${id}>`).join(' ') : '';
+      await staffChannel.send({
+        content: `🛒 **Diamond purchase requested!**\nBuyer: <@${interaction.user.id}>\nItem: **${item.name}** (${item.cost} pts, ${mode} mode)\nPlease deliver the reward.${staffMention ? `\n${staffMention}` : ''}`
+      }).catch(() => {});
+    }
+    return interaction.reply({ content: `✅ Purchase received for **${item.name}**: **${item.cost} pts** deducted (${mode}). Staff has been notified to deliver your diamonds 💎.`, ephemeral: true });
+  }
+
   if (interaction.isModalSubmit() && interaction.customId.startsWith('roommodal_')) {
     const matchId = interaction.customId.replace('roommodal_', '');
     console.log(`[MODAL] submit received for match ${matchId}`);
@@ -1255,6 +1343,70 @@ client.on(Events.MessageCreate, async (message) => {
       console.log('Clear error:', e.message);
     }
     return;
+  }
+
+  if (content === '&store') {
+    const items = storeModule.getItems();
+    const mode = getModeByChannel(message.channel.id);
+    if (items.length === 0) {
+      return message.reply('🛒 The store is empty. Supervisors can add items with `&storeadd`.');
+    }
+    const balance = storage.getPlayerPoints(message.author.id, mode).totalPoints;
+    const embed = new EmbedBuilder()
+      .setTitle('🛒 FF STORE')
+      .setDescription(`Exchange your **${mode.toUpperCase()} points** for rewards!\n${config.emojis.game || ''} Your balance: **${balance} pts**\n\nSelect an item below to buy it. Role items are granted instantly, diamond items are delivered by staff.`)
+      .setColor(0xFFA500);
+    const fields = items.map(it => ({
+      name: `${it.type === 'role' ? '👑' : '💎'} ${it.name}`,
+      value: `Cost: **${it.cost} pts**${it.type === 'role' && it.roleId ? ` -> <@&${it.roleId}>` : ' (staff delivery)'}`,
+      inline: false
+    }));
+    embed.addFields(fields);
+    const opts = items.slice(0, 25).map(it =>
+      new StringSelectMenuOptionBuilder()
+        .setLabel(it.name)
+        .setDescription(`${it.type === 'role' ? 'Role' : 'Diamonds'} - ${it.cost} pts`)
+        .setValue(it.id)
+    );
+    const row = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('store_menu')
+        .setPlaceholder('🛒 Choose an item to buy')
+        .addOptions(opts)
+    );
+    return message.reply({ embeds: [embed], components: [row] });
+  }
+
+  if (content.startsWith('&storeadd')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can add store items!');
+    }
+    const args = message.content.slice('&storeadd'.length).trim().split('|').map(s => s.trim());
+    const name = args[0];
+    const cost = parseInt(args[1]);
+    const type = (args[2] || '').toLowerCase();
+    const roleInput = args[3];
+    if (!name || isNaN(cost) || cost <= 0 || !['role', 'diamond'].includes(type)) {
+      return message.reply('Usage: `&storeadd <name>|<cost>|<role|diamond>|<roleId (role only)>`\nExamples:\n`&storeadd VIP Role|200|role|<roleId>`\n`&storeadd 500 Diamonds|300|diamond`');
+    }
+    let roleId = null;
+    if (type === 'role') {
+      const role = message.guild.roles.cache.get(roleInput || '') || (message.mentions.roles.size ? message.mentions.roles.first() : null);
+      if (!role) return message.reply('❌ Role items need a valid role ID or mention.');
+      roleId = role.id;
+    }
+    const item = storeModule.addItem({ name, cost, type, roleId });
+    return message.reply(`✅ Store item added: **${item.name}** (${item.cost} pts, ${item.type}${item.roleId ? ` - <@&${item.roleId}>` : ''}). ID: \`${item.id}\``);
+  }
+
+  if (content.startsWith('&storeremove')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can remove store items!');
+    }
+    const id = content.replace('&storeremove', '').trim();
+    if (!id) return message.reply('Usage: `&storeremove <itemId>`');
+    const ok = storeModule.removeItem(id);
+    return message.reply(ok ? `🚮 Store item \`${id}\` removed.` : '❌ Item not found.');
   }
 
   if (content === '&commands') {

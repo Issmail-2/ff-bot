@@ -76,6 +76,17 @@ function resetAllPoints(mode = 'amo') {
   savePoints(mode, { players: {} });
 }
 
+function adjustPoints(userId, delta, mode = 'amo') {
+  const data = loadPoints(mode);
+  if (!data.players[userId]) {
+    data.players[userId] = { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0 };
+  }
+  const p = data.players[userId];
+  p.totalPoints = Math.max(0, p.totalPoints + delta);
+  savePoints(mode, data);
+  return p.totalPoints;
+}
+
 function getLeaderboard(mode = 'amo') {
   const data = loadPoints(mode);
   const sorted = Object.entries(data.players)
@@ -99,4 +110,4 @@ function getRankBadge(userId, mode = 'amo') {
   return `#${rank}`;
 }
 
-module.exports = { getPlayerPoints, addPoints, removePoints, resetAllPoints, getLeaderboard, loadPoints, getPlayerRank, getRankBadge };
+module.exports = { getPlayerPoints, addPoints, removePoints, adjustPoints, resetAllPoints, getLeaderboard, loadPoints, getPlayerRank, getRankBadge };
