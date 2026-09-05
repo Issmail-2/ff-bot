@@ -11,6 +11,7 @@ if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705
 if (!config.pointsFile) config.pointsFile = './data/points.json';
 if (!config.logsCategoryId) config.logsCategoryId = config.modes.amo.logsCategoryId;
 if (!config.logsChannelId) config.logsChannelId = process.env.LOGS_CHANNEL_ID || '1545366915180924938';
+if (!config.infoChannelId) config.infoChannelId = process.env.INFO_CHANNEL_ID || '1535807851807899769';
 if (!config.voiceCategoryId) config.voiceCategoryId = config.modes.amo.voiceCategoryId;
 if (!config.requiredVoiceChannels) {
   config.requiredVoiceChannels = [
@@ -35,7 +36,7 @@ if (!config.staffRoles) {
 if (!config.matchRewards) {
   config.matchRewards = { winnerMvp: 80, winner: 50, loserMvp: 30, loser: 10 };
 }
-if (!config.jailRoleId) config.jailRoleId = process.env.JAIL_ROLE_ID || '';
+if (!config.jailRoleId) config.jailRoleId = process.env.JAIL_ROLE_ID || '1540120101792129145';
 if (!config.jailRoles) {
   config.jailRoles = process.env.JAIL_ROLE_IDS ? process.env.JAIL_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310'];
 }
@@ -190,6 +191,40 @@ async function unjailMember(guild, member, role, affected) {
       }
     }
   }
+}
+
+const COMMANDS_INFO = `📋 **BOT COMMANDS & PERMISSIONS**
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+👥 **ALL MEMBERS**
+\`!play 2v2 | 3v3 | 4v4\` - host a match
+\`!esport 2v2 | 3v3 | 4v4\` - host an esport match
+\`!leaderboard\` - show the top players
+
+🔧 **SUPERVISORS / ADMINS** (<@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310> <@&1466082863115145441>)
+\`!setpoints @user points win/loss\` - adjust a player's points (also: <@&1450212500581646460> and <@1177600499298599035>)
+\`!resetpoints\` - reset all points in all modes
+\`!cancelgame @user\` - cancel a player's match
+\`!clearmatches\` / \`!cleargames\` - clear stuck matches
+\`!setranks\` - refresh rank nicknames
+\`!resetvote\` - reset the vote and refund points
+\`&clear <n>\` - delete up to 100 messages (1-100)
+\`&blacklist <userID> <duration> <reason>\` - blacklist a player from matches
+\`&unblacklist <userID>\` - unblacklist a player
+
+⛓️ **JAIL** (ONLY <@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310> and <@1177600499298599035>)
+\`&jail <userID> <duration> <reason>\` - lock a player to the jail channels
+\`&unjail <userID>\` - release a jailed player
+
+⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\``;
+
+async function sendCommandsInfo(channel) {
+  if (!channel) return null;
+  const recent = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+  if (recent && recent.some(m => m.author.id === client.user.id && m.content.includes('BOT COMMANDS & PERMISSIONS'))) {
+    return null;
+  }
+  return channel.send(COMMANDS_INFO).catch(() => null);
 }
 
 function parseDuration(str) {
@@ -496,6 +531,10 @@ client.once(Events.ClientReady, (c) => {
     }
   }
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
+  const infoChannel = c.channels.cache.get(config.infoChannelId);
+  if (infoChannel) sendCommandsInfo(infoChannel).then(sent => {
+    if (sent) console.log('[INFO] Commands message posted');
+  });
 });
 
 setInterval(async () => {
@@ -1212,6 +1251,16 @@ client.on(Events.MessageCreate, async (message) => {
       console.log('Clear error:', e.message);
     }
     return;
+  }
+
+  if (content === '&commands') {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can post the commands list!');
+    }
+    const target = message.guild.channels.cache.get(config.infoChannelId) || message.channel;
+    const sent = await sendCommandsInfo(target);
+    if (sent) return message.reply(`✅ Commands list posted in <#${target.id}>.`);
+    return message.reply(`ℹ️ Commands list already exists in <#${target.id}>.`);
   }
 
   if (content === '!leaderboard') {

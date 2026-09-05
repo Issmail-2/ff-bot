@@ -6,6 +6,8 @@
   "supervisorRoleId": "1506540916519731310",
   "roomCategoryId": "1545316338145165332",
   "logsChannelId": "1545366915180924938",
+  "infoChannelId": "1535807851807899769",
+  "jailRoleId": "1540120101792129145",
   "pointsRoles": ["1450212500581646460"],
   "pointsUsers": ["1177600499298599035"],
   "adminRoles": [
