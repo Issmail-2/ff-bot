@@ -227,7 +227,7 @@ Remove items: \`&storeremove <itemId>\`
 \`!clearmatches\` / \`!cleargames\` - clear stuck matches
 \`!setranks\` - refresh rank nicknames
 \`!resetvote\` - reset the vote and refund points
-\`&refund <userID> <points>\` - refund points to a player
+\`&remove <userID> <points>\` - remove points from a player
 \`&clear <n>\` - delete up to 100 messages (1-100)
 \`&commands\` - repost this commands list
 \`&storeadd <name>|<cost>|<role|diamond>|<roleId>\` - add a store item
@@ -1426,23 +1426,23 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply({ embeds: [embed], components: [row] });
   }
 
-  if (content.startsWith('&refund')) {
+  if (content.startsWith('&remove')) {
     if (!hasCommandAccess(message.member)) {
-      return message.reply('❌ Only supervisors/admins can refund points!');
+      return message.reply('❌ Only supervisors/admins can remove points!');
     }
     const args = content.split(/\s+/);
     const userId = args[1];
     const points = parseInt(args[2]);
     if (!/^\d{15,20}$/.test(userId || '')) {
-      return message.reply('Usage: `&refund <userID> <points>`');
+      return message.reply('Usage: `&remove <userID> <points>`');
     }
     if (isNaN(points) || points <= 0) {
-      return message.reply('❌ Invalid points amount. Usage: `&refund <userID> <points>`');
+      return message.reply('❌ Invalid points amount. Usage: `&remove <userID> <points>`');
     }
     const mode = getModeByChannel(message.channel.id);
-    const total = storage.adjustPoints(userId, points, mode);
+    const total = storage.adjustPoints(userId, -points, mode);
     applyRankNicknames(message.guild).catch(() => {});
-    return message.reply(`✅ Refunded **${points} pts** to <@${userId}> (${mode}). New total: **${total} pts**.`);
+    return message.reply(`❌ Removed **${points} pts** from <@${userId}> (${mode}). New total: **${total} pts**.`);
   }
 
   if (content.startsWith('&storeadd')) {
