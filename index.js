@@ -613,8 +613,7 @@ client.once(Events.ClientReady, (c) => {
     }
   }
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
-  const infoChannel = c.channels.cache.get(config.infoChannelId);
-  if (infoChannel) postCommandsInfoWithRetry();
+  postCommandsInfoWithRetry();
   const guild = c.guilds.cache.first();
   const ranked = computeCombinedRanking();
   if (guild && ranked.length) applyRankOneRole(guild, ranked).catch(() => {});
