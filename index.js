@@ -1664,8 +1664,10 @@ client.on(Events.MessageCreate, async (message) => {
     if (!target) {
       return message.reply(`Usage: \`${isWin ? '!w' : '!l'} @player\``);
     }
+    console.log(`[VOTE] ${message.author.id} used ${isWin ? '!w' : '!l'} target=${target.id}; roles=[${message.member ? [...message.member.roles.cache.keys()].join(', ') : 'NULL MEMBER'}]`);
 
     if (canSetResult(message.member)) {
+      console.log(`[VOTE] allowed: ${message.author.id} canSetResult=true, matches=[${manager.getAllMatches().map(mm => `${mm.id}:${mm.status}`).join(', ')}]`);
       const adminMatch = manager.getAllMatches().find(m =>
         m.status === 'full' &&
         ((m.team1 || []).includes(target.id) || (m.team2 || []).includes(target.id))
