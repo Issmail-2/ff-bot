@@ -35,10 +35,12 @@ if (!config.staffRoles) {
 if (!config.matchRewards) {
   config.matchRewards = { winnerMvp: 80, winner: 50, loserMvp: 30, loser: 10 };
 }
+if (!config.jailRoleId) config.jailRoleId = process.env.JAIL_ROLE_ID || '';
 const REWARDS = config.matchRewards;
 const storage = require('./utils/storage');
 const manager = require('./utils/matchManager');
 const blacklistModule = require('./utils/blacklist');
+const jailModule = require('./utils/jail');
 
 const client = new Client({
   intents: [
@@ -99,6 +101,81 @@ function hasCommandAccess(member) {
   if (member.permissions.has('Administrator')) return true;
   if (config.adminRoles.some(id => id && member.roles.cache.has(id))) return true;
   return false;
+}
+
+async function getOrCreateJailRole(guild) {
+  const role = guild.roles.cache.get(config.jailRoleId) || guild.roles.cache.find(r => r.name === 'Jailed');
+  if (role) return role;
+  return await guild.roles.create({ name: 'Jailed', reason: 'Jail system' });
+}
+
+async function getOrCreateJailChannels(guild) {
+  const category = guild.channels.cache.get(config.jailCategoryId) || guild.channels.cache.find(c => c.name === '⛓️ Jail' && c.type === ChannelType.GuildCategory);
+  let cat;
+  if (category) {
+    cat = category;
+  } else {
+    cat = await guild.channels.create({
+      name: '⛓️ Jail',
+      type: ChannelType.GuildCategory,
+      permissionOverwrites: [{ id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] }]
+    });
+    config.jailCategoryId = cat.id;
+  }
+  let text = config.jailTextChannelId ? guild.channels.cache.get(config.jailTextChannelId) : null;
+  if (!text) text = cat.children.cache.find(c => c.type === ChannelType.GuildText);
+  if (!text) {
+    text = await guild.channels.create({ name: '🚪│jail', type: ChannelType.GuildText, parent: cat.id });
+    config.jailTextChannelId = text.id;
+  }
+  let voice = config.jailVoiceChannelId ? guild.channels.cache.get(config.jailVoiceChannelId) : null;
+  if (!voice) voice = cat.children.cache.find(c => c.type === ChannelType.GuildVoice);
+  if (!voice) {
+    voice = await guild.channels.create({ name: '🔇│jail', type: ChannelType.GuildVoice, parent: cat.id });
+    config.jailVoiceChannelId = voice.id;
+  }
+  return { category: cat, text, voice };
+}
+
+async function applyJail(guild, member) {
+  const role = await getOrCreateJailRole(guild);
+  const jail = await getOrCreateJailChannels(guild);
+
+  try { await role.setPermissions([]); } catch (e) { console.log('[JAIL] role perms:', e.message); }
+
+  await jail.category.permissionOverwrites.create(role.id, { allow: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
+  await jail.text.permissionOverwrites.create(role.id, {
+    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
+  }).catch(() => {});
+  await jail.voice.permissionOverwrites.create(role.id, {
+    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect]
+  }).catch(() => {});
+
+  const affected = [];
+  for (const channel of guild.channels.cache.values()) {
+    if (channel.id === jail.category.id || channel.id === jail.text.id || channel.id === jail.voice.id) continue;
+    if (channel.type === ChannelType.GuildCategory) continue;
+    if (!channel.permissionOverwrites) continue;
+    await channel.permissionOverwrites.create(role.id, { deny: [PermissionsBitField.Flags.ViewChannel] })
+      .then(() => affected.push(channel.id))
+      .catch(() => {});
+    await new Promise(r => setTimeout(r, 350));
+  }
+
+  try { await member.roles.add(role); } catch (e) { console.log('[JAIL] add role:', e.message); }
+  return { role, affected };
+}
+
+async function unjailMember(guild, member, role, affected) {
+  if (member && role) await member.roles.remove(role).catch(() => {});
+  if (role) {
+    for (const cid of (affected || [])) {
+      const ch = guild.channels.cache.get(cid);
+      if (ch && ch.permissionOverwrites) {
+        await ch.permissionOverwrites.delete(role.id).catch(() => {});
+      }
+    }
+  }
 }
 
 function parseDuration(str) {
@@ -407,6 +484,21 @@ client.once(Events.ClientReady, (c) => {
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
 });
 
+setInterval(async () => {
+  const now = Date.now();
+  const expired = jailModule.loadJails().filter(j => j.expiresAt !== -1 && j.expiresAt <= now);
+  if (expired.length === 0) return;
+  for (const j of expired) {
+    const guild = client.guilds.cache.get(j.guildId) || client.guilds.cache.first();
+    if (!guild) continue;
+    const role = guild.roles.cache.get(j.roleId);
+    const member = await guild.members.fetch(j.userId).catch(() => null);
+    await unjailMember(guild, member, role, j.affectedChannels);
+    console.log(`[JAIL] released ${j.userId} (expired)`);
+    jailModule.unjailUser(j.userId);
+  }
+}, 60000);
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
@@ -647,6 +739,18 @@ async function settleMatchResult(guild, match) {
   applyRankNicknames(guild).catch(() => {});
 }
 
+async function timeoutMatch(guild, matchId) {
+  const match = manager.getMatch(matchId);
+  if (!match || match.status !== 'waiting') return;
+  const channel = guild.channels.cache.get(match.channelId);
+  if (channel) {
+    const msg = await channel.messages.fetch(match.message).catch(() => null);
+    if (msg) await msg.delete().catch(() => {});
+    await channel.send('⏰ **Match timed out!** No one joined within 30 seconds.').catch(() => {});
+  }
+  manager.removeMatch(matchId);
+}
+
 async function performJoin(interaction, match, team) {
   const bl = blacklistModule.isBlacklisted(interaction.user.id);
   if (bl) {
@@ -655,6 +759,10 @@ async function performJoin(interaction, match, team) {
   const result = manager.joinTeam(match.id, interaction.user.id, team);
   if (!result.success) {
     return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
+  }
+  if (match.joinTimeout) {
+    clearTimeout(match.joinTimeout);
+    match.joinTimeout = null;
   }
 
   const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
@@ -727,6 +835,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       console.log('[MODAL] match box sent successfully, new msg id:', newMsg.id);
 
       await interaction.editReply({ content: `✅ Match created! You are on 🔴 Team 1.` }).catch(() => {});
+      if (match.joinTimeout) clearTimeout(match.joinTimeout);
+      match.joinTimeout = setTimeout(() => {
+        timeoutMatch(interaction.guild, match.id);
+      }, 30000);
     } catch (e) {
       console.error('Error creating match:', e);
       await interaction.editReply({ content: `❌ Error creating match: ${e.message}.` }).catch(() => {});
@@ -989,6 +1101,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await manager.deleteVoiceChannels(interaction.guild, match);
       await manager.deleteChannel(interaction.guild, match);
+      if (match.joinTimeout) {
+        clearTimeout(match.joinTimeout);
+        match.joinTimeout = null;
+      }
       manager.removeMatch(matchId);
 
       const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
@@ -1069,12 +1185,15 @@ client.on(Events.MessageCreate, async (message) => {
     }
     try {
       const fetched = await message.channel.messages.fetch({ limit: count });
+      const delCount = fetched.size;
       await message.delete().catch(() => {});
       await message.channel.bulkDelete(fetched).catch(async () => {
         for (const m of fetched.values()) {
           await m.delete().catch(() => {});
         }
       });
+      const conf = await message.channel.send(`✅ Successfully cleared **${delCount}** message(s)!`).catch(() => null);
+      if (conf) setTimeout(() => conf.delete().catch(() => {}), 4000);
     } catch (e) {
       console.log('Clear error:', e.message);
     }
@@ -1135,6 +1254,43 @@ client.on(Events.MessageCreate, async (message) => {
     }
     const removed = blacklistModule.unblacklistUser(args[1]);
     await message.reply(removed ? `✅ <@${args[1]}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
+  } else if (content.startsWith('&jail')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only admins can jail players!');
+    }
+    const args = message.content.trim().split(/\s+/);
+    if (args.length < 4) {
+      return message.reply('Usage: `&jail <userId> <duration> <reason>`\nDurations: `30m`, `5h`, `7d`, `2w`, `perm`');
+    }
+    const userId = args[1];
+    if (!/^\d{15,20}$/.test(userId)) {
+      return message.reply('❌ Invalid user ID.');
+    }
+    const durationMs = parseDuration(args[2]);
+    if (durationMs === null) {
+      return message.reply('❌ Invalid duration. Use e.g. `30m`, `5h`, `7d`, `2w`, or `perm`.');
+    }
+    const reason = args.slice(3).join(' ');
+    const member = await message.guild.members.fetch(userId).catch(() => null);
+    if (!member) return message.reply('❌ User not found in this server.');
+    const res = await applyJail(message.guild, member);
+    const entry = jailModule.jailUser(userId, res.role.id, message.guild.id, durationMs === -1 ? null : durationMs, reason, message.author.id, res.affected);
+    const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
+    await message.reply(`⛓️ <@${userId}> has been jailed!\n📋 Reason: ${reason}\n⏳ Release: ${expiry}`);
+  } else if (content.startsWith('&unjail')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only admins can unjail players!');
+    }
+    const args = message.content.trim().split(/\s+/);
+    if (args.length < 2) {
+      return message.reply('Usage: `&unjail <userId>`');
+    }
+    const entry = jailModule.unjailUser(args[1]);
+    if (!entry) return message.reply('ℹ️ That user is not jailed.');
+    const role = message.guild.roles.cache.get(entry.roleId);
+    const member = await message.guild.members.fetch(args[1]).catch(() => null);
+    await unjailMember(message.guild, member, role, entry.affectedChannels);
+    await message.reply(`✅ <@${args[1]}> has been released from jail.`);
   } else if (content.startsWith('!setranks')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can set rank nicknames!');
