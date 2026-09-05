@@ -36,6 +36,12 @@ if (!config.matchRewards) {
   config.matchRewards = { winnerMvp: 80, winner: 50, loserMvp: 30, loser: 10 };
 }
 if (!config.jailRoleId) config.jailRoleId = process.env.JAIL_ROLE_ID || '';
+if (!config.jailRoles) {
+  config.jailRoles = process.env.JAIL_ROLE_IDS ? process.env.JAIL_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310'];
+}
+if (!config.jailUsers) {
+  config.jailUsers = process.env.JAIL_USER_IDS ? process.env.JAIL_USER_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1177600499298599035'];
+}
 const REWARDS = config.matchRewards;
 const storage = require('./utils/storage');
 const manager = require('./utils/matchManager');
@@ -100,6 +106,14 @@ function hasCommandAccess(member) {
   if (!member) return false;
   if (member.permissions.has('Administrator')) return true;
   if (config.adminRoles.some(id => id && member.roles.cache.has(id))) return true;
+  return false;
+}
+
+function canUseJail(member) {
+  if (!member) return false;
+  if (member.permissions.has('Administrator')) return true;
+  if (config.jailRoles.some(id => id && member.roles.cache.has(id))) return true;
+  if (config.jailUsers.includes(member.id)) return true;
   return false;
 }
 
@@ -1255,7 +1269,7 @@ client.on(Events.MessageCreate, async (message) => {
     const removed = blacklistModule.unblacklistUser(args[1]);
     await message.reply(removed ? `✅ <@${args[1]}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
   } else if (content.startsWith('&jail')) {
-    if (!hasCommandAccess(message.member)) {
+    if (!canUseJail(message.member)) {
       return message.reply('❌ Only admins can jail players!');
     }
     const args = message.content.trim().split(/\s+/);
@@ -1278,7 +1292,7 @@ client.on(Events.MessageCreate, async (message) => {
     const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
     await message.reply(`⛓️ <@${userId}> has been jailed!\n📋 Reason: ${reason}\n⏳ Release: ${expiry}`);
   } else if (content.startsWith('&unjail')) {
-    if (!hasCommandAccess(message.member)) {
+    if (!canUseJail(message.member)) {
       return message.reply('❌ Only admins can unjail players!');
     }
     const args = message.content.trim().split(/\s+/);
