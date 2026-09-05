@@ -243,15 +243,45 @@ Remove items: \`&storeremove <itemId>\`
 
 async function sendCommandsInfo(channel) {
   if (!channel) return null;
-  const recent = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+  let recent;
+  try {
+    recent = await channel.messages.fetch({ limit: 20 });
+  } catch (e) {
+    console.log(`[INFO] fetch failed in ${channel.id}: ${e.message}`);
+    return null;
+  }
   if (recent) {
-    const old = recent.filter(m => m.author.id === client.user.id && m.content.includes('BOT COMMANDS & PERMISSIONS'));
+    const old = recent.filter(m => m.author.id === client.user.id && m.content.includes('HOW TO USE THE BOT - FREE FIRE MATCHES'));
     for (const m of old.values()) {
       if (m.content === COMMANDS_INFO) return null;
       await m.delete().catch(() => {});
     }
   }
-  return channel.send(COMMANDS_INFO).catch(() => null);
+  try {
+    const sent = await channel.send(COMMANDS_INFO);
+    console.log(`[INFO] Commands message posted to ${channel.id}`);
+    return sent;
+  } catch (e) {
+    console.log(`[INFO] send failed to ${channel.id}: ${e.message}`);
+    return null;
+  }
+}
+
+async function postCommandsInfoWithRetry() {
+  const infoChannel = client.channels.cache.get(config.infoChannelId);
+  if (!infoChannel) {
+    console.log(`[INFO] info channel ${config.infoChannelId} not in cache yet`);
+    return false;
+  }
+  const sent = await sendCommandsInfo(infoChannel);
+  if (!sent) {
+    setTimeout(async () => {
+      const ch = client.channels.cache.get(config.infoChannelId);
+      if (ch) await sendCommandsInfo(ch);
+    }, 15000);
+    return false;
+  }
+  return true;
 }
 
 function parseDuration(str) {
@@ -584,9 +614,7 @@ client.once(Events.ClientReady, (c) => {
   }
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
   const infoChannel = c.channels.cache.get(config.infoChannelId);
-  if (infoChannel) sendCommandsInfo(infoChannel).then(sent => {
-    if (sent) console.log('[INFO] Commands message posted');
-  });
+  if (infoChannel) postCommandsInfoWithRetry();
   const guild = c.guilds.cache.first();
   const ranked = computeCombinedRanking();
   if (guild && ranked.length) applyRankOneRole(guild, ranked).catch(() => {});
