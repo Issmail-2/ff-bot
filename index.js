@@ -28,7 +28,7 @@ if (!config.pointsUsers) {
   config.pointsUsers = process.env.POINTS_USER_IDS ? process.env.POINTS_USER_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1177600499298599035'];
 }
 if (!config.adminRoles) {
-  config.adminRoles = process.env.ADMIN_ROLE_IDS ? process.env.ADMIN_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310', '1466082863115145441'];
+  config.adminRoles = process.env.ADMIN_ROLE_IDS ? process.env.ADMIN_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310'];
 }
 if (!config.staffRoles) {
   config.staffRoles = process.env.STAFF_ROLE_IDS ? process.env.STAFF_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1537318639395545139', '1506540916519731310', '1459133371874807921', '1466082863115145441'];
@@ -201,7 +201,7 @@ const COMMANDS_INFO = `📋 **BOT COMMANDS & PERMISSIONS**
 \`!esport 2v2 | 3v3 | 4v4\` - host an esport match
 \`!leaderboard\` - show the top players
 
-🔧 **SUPERVISORS / ADMINS** (<@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310> <@&1466082863115145441>)
+🔧 **SUPERVISORS / ADMINS** (<@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310>)
 \`!setpoints @user points win/loss\` - adjust a player's points (also: <@&1450212500581646460> and <@1177600499298599035>)
 \`!resetpoints\` - reset all points in all modes
 \`!cancelgame @user\` - cancel a player's match
@@ -221,8 +221,12 @@ const COMMANDS_INFO = `📋 **BOT COMMANDS & PERMISSIONS**
 async function sendCommandsInfo(channel) {
   if (!channel) return null;
   const recent = await channel.messages.fetch({ limit: 20 }).catch(() => null);
-  if (recent && recent.some(m => m.author.id === client.user.id && m.content.includes('BOT COMMANDS & PERMISSIONS'))) {
-    return null;
+  if (recent) {
+    const old = recent.filter(m => m.author.id === client.user.id && m.content.includes('BOT COMMANDS & PERMISSIONS'));
+    for (const m of old.values()) {
+      if (m.content === COMMANDS_INFO) return null;
+      await m.delete().catch(() => {});
+    }
   }
   return channel.send(COMMANDS_INFO).catch(() => null);
 }
