@@ -125,9 +125,7 @@ function canUseJail(member) {
 
 function canSetResult(member) {
   if (!member) return false;
-  if (member.permissions.has('Administrator')) return true;
-  if (config.setResultRoles.some(id => id && member.roles.cache.has(id))) return true;
-  return false;
+  return config.setResultRoles.some(id => id && member.roles.cache.has(id));
 }
 
 async function getOrCreateJailRole(guild) {
