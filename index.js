@@ -16,6 +16,7 @@ if (!config.rankOneRoleId) config.rankOneRoleId = process.env.RANK_ONE_ROLE_ID |
 if (!config.setResultRoles) {
   config.setResultRoles = process.env.SET_RESULT_ROLE_IDS ? process.env.SET_RESULT_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310', '1466082863115145441'];
 }
+if (!config.inviteBonus) config.inviteBonus = parseInt(process.env.INVITE_BONUS_POINTS) || 10;
 if (!config.voiceCategoryId) config.voiceCategoryId = config.modes.amo.voiceCategoryId;
 if (!config.requiredVoiceChannels) {
   config.requiredVoiceChannels = [
@@ -652,6 +653,22 @@ function buildMatchButtons(match, userId) {
   return components;
 }
 
+client.invitesCache = new Map();
+
+async function syncInviteCache(guild) {
+  const map = client.invitesCache.get(guild.id) || new Map();
+  try {
+    const invites = await guild.invites.fetch().catch(() => null);
+    if (invites) {
+      for (const inv of invites.values()) {
+        map.set(inv.code, { uses: inv.uses || 0, inviterId: inv.inviter ? inv.inviter.id : null });
+      }
+      client.invitesCache.set(guild.id, map);
+    }
+  } catch (e) {}
+  return map;
+}
+
 client.once(Events.ClientReady, (c) => {
   console.log(`✅ Logged in as ${c.user.tag}!`);
   for (const mode of ['amo', 'esport']) {
@@ -668,6 +685,9 @@ client.once(Events.ClientReady, (c) => {
   const guild = c.guilds.cache.first();
   const ranked = computeCombinedRanking();
   if (guild && ranked.length) applyRankOneRole(guild, ranked).catch(() => {});
+  for (const g of c.guilds.cache.values()) {
+    syncInviteCache(g);
+  }
 });
 
 setInterval(async () => {
@@ -1744,6 +1764,45 @@ client.on(Events.MessageCreate, async (message) => {
       await message.channel.send({ content: `⏳ Waiting for the ${pending} vote before finishing the match.`, }).catch(() => {});
     }
   }
+});
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  if (member.user.bot) return;
+  const guild = member.guild;
+  const cachedMap = client.invitesCache.get(guild.id);
+  await syncInviteCache(guild);
+  const newMap = client.invitesCache.get(guild.id);
+  if (!newMap || !cachedMap) return;
+
+  let usedInvite = null;
+  for (const [code, inv] of newMap) {
+    const prev = cachedMap.get(code);
+    if (prev && inv.uses > prev.uses) {
+      usedInvite = inv;
+      break;
+    }
+  }
+  if (!usedInvite || !usedInvite.inviterId || usedInvite.inviterId === member.id) return;
+
+  const points = config.inviteBonus || 10;
+  storage.adjustPoints(usedInvite.inviterId, points, 'amo');
+  console.log(`[INVITE] ${member.id} joined via invite of ${usedInvite.inviterId}; +${points} pts`);
+  const inviter = guild.members.cache.get(usedInvite.inviterId);
+  if (inviter) {
+    inviter.send(`🎉 **New member via your invite!**\n<@${member.id}> joined your server using your invite link. You earned **${points} points**!`).catch(() => {});
+  }
+});
+
+client.on(Events.InviteCreate, (invite) => {
+  const map = client.invitesCache.get(invite.guild.id);
+  if (!map) return;
+  map.set(invite.code, { uses: invite.uses || 0, inviterId: invite.inviter ? invite.inviter.id : null });
+});
+
+client.on(Events.InviteDelete, (invite) => {
+  const map = client.invitesCache.get(invite.guild.id);
+  if (!map) return;
+  map.delete(invite.code);
 });
 
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
