@@ -13,6 +13,9 @@ if (!config.logsCategoryId) config.logsCategoryId = config.modes.amo.logsCategor
 if (!config.logsChannelId) config.logsChannelId = process.env.LOGS_CHANNEL_ID || '1545366915180924938';
 if (!config.infoChannelId) config.infoChannelId = process.env.INFO_CHANNEL_ID || '1545379695363620874';
 if (!config.rankOneRoleId) config.rankOneRoleId = process.env.RANK_ONE_ROLE_ID || '';
+if (!config.setResultRoles) {
+  config.setResultRoles = process.env.SET_RESULT_ROLE_IDS ? process.env.SET_RESULT_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310', '1466082863115145441'];
+}
 if (!config.voiceCategoryId) config.voiceCategoryId = config.modes.amo.voiceCategoryId;
 if (!config.requiredVoiceChannels) {
   config.requiredVoiceChannels = [
@@ -117,6 +120,13 @@ function canUseJail(member) {
   if (member.permissions.has('Administrator')) return true;
   if (config.jailRoles.some(id => id && member.roles.cache.has(id))) return true;
   if (config.jailUsers.includes(member.id)) return true;
+  return false;
+}
+
+function canSetResult(member) {
+  if (!member) return false;
+  if (member.permissions.has('Administrator')) return true;
+  if (config.setResultRoles.some(id => id && member.roles.cache.has(id))) return true;
   return false;
 }
 
@@ -1637,7 +1647,7 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(`Usage: \`${isWin ? '!w' : '!l'} @player\``);
     }
 
-    if (hasCommandAccess(message.member)) {
+    if (canSetResult(message.member)) {
       const adminMatch = manager.getAllMatches().find(m =>
         m.status === 'full' &&
         ((m.team1 || []).includes(target.id) || (m.team2 || []).includes(target.id))
