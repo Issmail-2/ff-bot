@@ -1275,14 +1275,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
       await interaction.deferReply({ ephemeral: true });
-      const publicChannel = interaction.guild.channels.cache.get(match.channelId);
       const staffMsg = `🛡️ **Staff Request** from <@${interaction.user.id}> for Match ${match.teamSize}v${match.teamSize}.\n${roleMentions}`;
       try {
-        if (publicChannel) {
-          await publicChannel.send({ content: staffMsg, allowedMentions: { roles: (config.staffRoles || []), users: [] } });
-        } else {
-          await interaction.channel.send({ content: staffMsg, allowedMentions: { roles: (config.staffRoles || []), users: [] } });
-        }
+        await interaction.channel.send({ content: staffMsg, allowedMentions: { roles: (config.staffRoles || []), users: [] } });
         await interaction.editReply({ content: '✅ Staff has been notified!' });
       } catch (e) {
         console.log('[STAFF] send failed:', e.message);
