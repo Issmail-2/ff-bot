@@ -1637,6 +1637,43 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(`Usage: \`${isWin ? '!w' : '!l'} @player\``);
     }
 
+    if (hasCommandAccess(message.member)) {
+      const adminMatch = manager.getAllMatches().find(m =>
+        m.status === 'full' &&
+        ((m.team1 || []).includes(target.id) || (m.team2 || []).includes(target.id))
+      ) || manager.getAllMatches().find(m => m.status === 'full');
+      if (!adminMatch) {
+        return message.reply('❌ No active match found for that player.');
+      }
+      const team = adminMatch.team1.includes(target.id) ? 1 : 2;
+      if (isWin) {
+        if (adminMatch.winnerTeam) {
+          return message.reply('✅ Winner is already set. Use `!l @player` to set the loser.');
+        }
+        adminMatch.winnerTeam = team;
+        adminMatch.mvpWinnerId = target.id;
+        adminMatch.winnerId = target.id;
+        adminMatch.winnerVoteSet = true;
+      } else {
+        if (adminMatch.loserTeam) {
+          return message.reply('✅ Loser is already set. Use `!w @player` to set the winner.');
+        }
+        adminMatch.loserTeam = team;
+        adminMatch.mvpLoserId = target.id;
+        adminMatch.loserId = target.id;
+        adminMatch.loserVoteSet = true;
+      }
+      manager.persistMatches();
+      await message.reply(`✅ ${isWin ? '🏆 Winner' : '💪 Loser'} set by <@${message.author.id}>: <@${target.id}> (Team ${team}).`);
+      if (adminMatch.winnerTeam && adminMatch.loserTeam) {
+        await settleMatchResult(message.guild, adminMatch);
+      } else {
+        const pending = isWin ? '💪 **!l** loser' : '🏆 **!w** winner';
+        await message.channel.send({ content: `⏳ Waiting for the ${pending} before finishing the match.` }).catch(() => {});
+      }
+      return;
+    }
+
     const doneMatch = manager.getAllMatches().find(m =>
       m.creatorId === message.author.id &&
       (m.status === 'full' || m.status === 'waiting')
