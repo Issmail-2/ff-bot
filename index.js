@@ -1548,6 +1548,28 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply(`ℹ️ Commands list already exists in <#${target.id}>.`);
   }
 
+  if (content.startsWith('&announce')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can announce!');
+    }
+    const parts = content.replace('&announce', '').trim().split(/\s+/);
+    const channelId = parts.shift();
+    if (!channelId || !/^\d+$/.test(channelId) || parts.length === 0) {
+      return message.reply('Usage: `&announce <channelId> <message>`');
+    }
+    const target = message.guild.channels.cache.get(channelId);
+    if (!target) {
+      return message.reply(`❌ Channel <#${channelId}> not found in this server.`);
+    }
+    const text = content.replace('&announce', '').trim().replace(channelId, '').trim();
+    const sent = await target.send(text).catch((e) => {
+      message.reply(`❌ Could not send: ${e.message}`);
+      return null;
+    });
+    if (sent) return message.reply(`✅ Announcement posted in <#${channelId}>.`);
+    return;
+  }
+
   if (content === '!leaderboard') {
     await adminCommands.leaderboard(message, mode);
   } else if (content === '!resetpoints') {
