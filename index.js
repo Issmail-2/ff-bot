@@ -484,7 +484,7 @@ async function ensureEsportChannels(guild) {
 }
 
 
-async function buildMatchBox(guild, match, creatorUser) {
+function buildMatchBoxEmbed(guild, match, creatorUser) {
   const progress1 = `${match.team1.length}/${match.teamSize}`;
   const progress2 = `${match.team2.length}/${match.teamSize}`;
 
@@ -498,25 +498,16 @@ async function buildMatchBox(guild, match, creatorUser) {
   }).join('\n') || '*Empty*';
   const display = getModeConfig(match.mode).displayName;
 
-  let box = '';
-  box += `### __${config.emojis.game} ${display} ${match.teamSize}v${match.teamSize} Match__\n`;
-  box += '\n';
-  box += `> Match started by <@${match.creatorId}>\n`;
-  box += '\n';
-  box += `${config.emojis.team1} Team 1 (${progress1})\n`;
-  box += t1 + '\n';
-  box += '\n';
-  box += `${config.emojis.team2} Team 2 (${progress2})\n`;
-  box += t2;
-
-  return box;
-}
-
-async function buildMatchEmbed(guild, match, creatorUser) {
-  const box = await buildMatchBox(guild, match, creatorUser);
   const embed = new EmbedBuilder()
-    .setDescription(box)
-    .setColor(0xFF6600);
+    .setTitle(`${config.emojis.game} ${display} ${match.teamSize}v${match.teamSize} Match`)
+    .setColor(0xFF6600)
+    .setDescription(`Match started by <@${match.creatorId}>`)
+    .addFields(
+      { name: `${config.emojis.team1} Team 1 (${progress1})`, value: t1, inline: true },
+      { name: `${config.emojis.team2} Team 2 (${progress2})`, value: t2, inline: true }
+    )
+    .setFooter({ text: 'Use the buttons below to join or leave a team.' });
+
   return embed;
 }
 
@@ -561,7 +552,7 @@ async function startFullMatch(guild, match) {
     const msg2 = await apostado.messages.fetch(match.message).catch(() => null);
     if (msg2) {
       await msg2.edit({
-        content: await buildMatchBox(guild, match, null),
+        embeds: [buildMatchBoxEmbed(guild, match, null)],
         components: []
       }).catch(() => {});
     }
@@ -978,7 +969,7 @@ async function performJoin(interaction, match, team) {
   const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
   if (msg) {
     await msg.edit({
-      content: await buildMatchBox(interaction.guild, match, interaction.user),
+      embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)],
       components: buildMatchButtons(match, interaction.user.id)
     });
   }
@@ -1068,7 +1059,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
 
     try {
-      const matchBox = await buildMatchBox(interaction.guild, match, interaction.user);
+      const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
       const components = buildMatchButtons(match, interaction.user.id);
 
       const channel = interaction.guild.channels.cache.get(match.channelId);
@@ -1076,7 +1067,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const oldMsg = await channel.messages.fetch(match.message).catch(() => null);
       if (oldMsg) await oldMsg.delete().catch(() => {});
 
-      const newMsg = await channel.send({ content: matchBox, components });
+      const newMsg = await channel.send({ embeds: [matchEmbed], components });
       match.message = newMsg.id;
       manager.persistMatches();
       console.log('[MODAL] match box sent successfully, new msg id:', newMsg.id);
@@ -1336,7 +1327,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
       if (msg) {
         await msg.edit({
-          content: await buildMatchBox(interaction.guild, match, interaction.user),
+          embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)],
           components: buildMatchButtons(match, interaction.user.id)
         });
       }
@@ -1364,11 +1355,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
       if (msg) {
-        const cancelledEmbed = new EmbedBuilder()
-          .setTitle('❌ Match Cancelled')
-          .setColor(0xFF0000)
-          .setDescription(`Match by <@${match.creatorId}> has been cancelled.`);
-        await msg.edit({ embeds: [cancelledEmbed], components: [] });
+        await msg.edit({ content: `❌ **Match cancelled by** <@${match.creatorId}>`, embeds: [], components: [] });
       }
 
       await interaction.reply({ content: '❌ Match cancelled!', ephemeral: true });
