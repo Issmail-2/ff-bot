@@ -823,8 +823,10 @@ client.on(Events.MessageCreate, async (message) => {
 async function cleanupOldMessages(channel) {
   try {
     const msgs = await channel.messages.fetch({ limit: 50 });
+    const activeMsgs = manager.getAllMatches().map(mm => mm.message).filter(Boolean);
     const toDelete = msgs.filter(m =>
-      m.author.id === client.user.id || m.content.trim().toLowerCase().startsWith('!play')
+      (m.author.id === client.user.id && !activeMsgs.includes(m.id)) ||
+      m.content.trim().toLowerCase().startsWith('!play')
     );
     if (toDelete.size > 0) {
       await channel.bulkDelete(toDelete).catch(async () => {
