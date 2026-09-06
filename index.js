@@ -219,11 +219,33 @@ async function applyJail(guild, member) {
   }
 
   try { await member.roles.add(role); } catch (e) { console.log('[JAIL] add role:', e.message); }
-  return { role, affected };
+
+  const removedRoles = [];
+  const myHighest = guild.members.me ? guild.members.me.roles.highest : null;
+  for (const r of member.roles.cache.values()) {
+    if (r.id === role.id) continue;
+    if (r.tags) continue;
+    if (myHighest && myHighest.position <= r.position) continue;
+    try {
+      await member.roles.remove(r.id);
+      removedRoles.push(r.id);
+      await new Promise(res => setTimeout(res, 250));
+    } catch (e) { console.log('[JAIL] remove role ' + r.id + ':', e.message); }
+  }
+  if (removedRoles.length) console.log(`[JAIL] removed ${removedRoles.length} role(s) from ${member.id}`);
+
+  return { role, affected, removedRoles };
 }
 
-async function unjailMember(guild, member, role, affected) {
+async function unjailMember(guild, member, role, affected, removedRoles) {
   if (member && role) await member.roles.remove(role).catch(() => {});
+  if (member && removedRoles) {
+    for (const rid of removedRoles) {
+      const r = guild.roles.cache.get(rid);
+      if (!r) continue;
+      await member.roles.add(r.id).catch(() => {});
+    }
+  };
   if (role) {
     for (const cid of (affected || [])) {
       const ch = guild.channels.cache.get(cid);
@@ -1049,7 +1071,7 @@ setInterval(async () => {
     if (!guild) continue;
     const role = guild.roles.cache.get(j.roleId);
     const member = await guild.members.fetch(j.userId).catch(() => null);
-    await unjailMember(guild, member, role, j.affectedChannels);
+    await unjailMember(guild, member, role, j.affectedChannels, j.removedRoles);
     console.log(`[JAIL] released ${j.userId} (expired)`);
     jailModule.unjailUser(j.userId);
   }
@@ -2068,9 +2090,9 @@ client.on(Events.MessageCreate, async (message) => {
     const member = await message.guild.members.fetch(userId).catch(() => null);
     if (!member) return message.reply('❌ User not found in this server.');
     const res = await applyJail(message.guild, member);
-    const entry = jailModule.jailUser(userId, res.role.id, message.guild.id, durationMs === -1 ? null : durationMs, reason, message.author.id, res.affected);
+    const entry = jailModule.jailUser(userId, res.role.id, message.guild.id, durationMs === -1 ? null : durationMs, reason, message.author.id, res.affected, res.removedRoles);
     const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
-    await message.reply(`⛓️ <@${userId}> has been jailed!\n📋 Reason: ${reason}\n⏳ Release: ${expiry}`);
+    await message.reply(`⛓️ <@${userId}> has been jailed!${res.removedRoles && res.removedRoles.length ? `\n🗂️ Removed **${res.removedRoles.length}** role(s) (restored on release).` : ''}\n📋 Reason: ${reason}\n⏳ Release: ${expiry}`);
   } else if (content.startsWith('&unjail')) {
     if (!canUseJail(message.member)) {
       return message.reply('❌ Only admins can unjail players!');
@@ -2083,7 +2105,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!entry) return message.reply('ℹ️ That user is not jailed.');
     const role = message.guild.roles.cache.get(entry.roleId);
     const member = await message.guild.members.fetch(args[1]).catch(() => null);
-    await unjailMember(message.guild, member, role, entry.affectedChannels);
+    await unjailMember(message.guild, member, role, entry.affectedChannels, entry.removedRoles);
     await message.reply(`✅ <@${args[1]}> has been released from jail.`);
   } else if (content.startsWith('!setranks')) {
     if (!hasCommandAccess(message.member)) {

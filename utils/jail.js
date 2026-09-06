@@ -29,7 +29,7 @@ function getJail(userId) {
   return list.find(e => e.userId === userId) || null;
 }
 
-function jailUser(userId, roleId, guildId, durationMs, reason, byId, affectedChannels) {
+function jailUser(userId, roleId, guildId, durationMs, reason, byId, affectedChannels, removedRoles) {
   const list = loadJails();
   const entry = {
     userId,
@@ -39,7 +39,8 @@ function jailUser(userId, roleId, guildId, durationMs, reason, byId, affectedCha
     byId: byId || 'unknown',
     createdAt: Date.now(),
     expiresAt: durationMs === null ? -1 : Date.now() + durationMs,
-    affectedChannels: affectedChannels || []
+    affectedChannels: affectedChannels || [],
+    removedRoles: removedRoles || []
   };
   const idx = list.findIndex(e => e.userId === userId);
   if (idx !== -1) list[idx] = entry;
