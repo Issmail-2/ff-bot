@@ -787,7 +787,11 @@ client.on(Events.MessageCreate, async (message) => {
       new ButtonBuilder()
         .setCustomId(`setup_${match.id}`)
         .setLabel('⚙️ Set Room Config')
-        .setStyle(ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`cancel_${match.id}`)
+        .setLabel('❌ Cancel Match')
+        .setStyle(ButtonStyle.Danger)
     );
 
     await message.delete().catch(() => {});
@@ -1619,8 +1623,23 @@ client.on(Events.MessageCreate, async (message) => {
     if (!existing) return message.reply('❌ No active match found for that user.');
     await manager.deleteVoiceChannels(message.guild, existing);
     await manager.deleteChannel(message.guild, existing);
+    if (existing.joinTimeout) {
+      clearTimeout(existing.joinTimeout);
+      existing.joinTimeout = null;
+    }
+    if (existing.configTimeout) {
+      clearTimeout(existing.configTimeout);
+      existing.configTimeout = null;
+    }
+    const matchChan = message.guild.channels.cache.get(existing.channelId);
+    if (matchChan && existing.message) {
+      const msg = await matchChan.messages.fetch(existing.message).catch(() => null);
+      if (msg) {
+        await msg.edit({ content: `❌ **Match cancelled by admin** (<@${message.author.id}>)`, embeds: [], components: [] }).catch(() => {});
+      }
+    }
     manager.removeMatch(existing.id);
-    await message.reply(`❌ Cancelled <@${target.id}>'s match!`);
+    await message.reply(`❌ **Match cancelled by admin!** <@${target.id}>'s match has been cancelled.`);
   } else if (content.startsWith('&blacklist')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can blacklist users!');
