@@ -75,10 +75,22 @@ function loadMatches() {
   }
 }
 
+function serializeMatch(m) {
+  const copy = { ...m };
+  delete copy.joinTimeout;
+  return copy;
+}
+
 function persistMatches() {
   ensureMatchesFile();
-  const arr = Array.from(activeMatches.values()).filter(m => m.status === 'waiting' || m.status === 'full');
-  fs.writeFileSync(MATCHES_FILE, JSON.stringify(arr, null, 2));
+  const arr = Array.from(activeMatches.values())
+    .filter(m => m.status === 'waiting' || m.status === 'full')
+    .map(serializeMatch);
+  try {
+    fs.writeFileSync(MATCHES_FILE, JSON.stringify(arr, null, 2));
+  } catch (e) {
+    console.log('persistMatches error:', e.message);
+  }
 }
 
 loadMatches();
