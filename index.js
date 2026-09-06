@@ -541,13 +541,44 @@ async function updateMatchChannel(guild, match) {
 
 function buildResultButtons(match) {
   const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`staffreq_${match.id}`).setLabel('🛡️ Staff Request').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`staffreq_${match.id}`).setLabel('🛡️ Staff Request').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`votecancel_${match.id}`).setLabel('❌ Cancel My Vote').setStyle(ButtonStyle.Danger)
   );
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`mvpwinner_${match.id}`).setLabel('🏆 MVP Winner').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`mvploser_${match.id}`).setLabel('💪 MVP Loser').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`mvpvote_${match.id}`).setLabel('🗳️ Vote MVP').setStyle(ButtonStyle.Success)
   );
   return [row1, row2];
+}
+
+function buildMvpModal(guild, match) {
+  const roster = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
+  const options = roster.map(id => {
+    const member = guild.members.cache.get(id);
+    const name = member ? (member.displayName || member.user.username) : id;
+    return new StringSelectMenuOptionBuilder()
+      .setLabel(`Team ${match.team1.includes(id) ? 1 : 2} • ${name}`.slice(0, 100))
+      .setValue(id);
+  });
+  const winnerSelect = new StringSelectMenuBuilder()
+    .setCustomId('mvpWinnerSelect')
+    .setPlaceholder('Select the WINNER (MVP)')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(options);
+  const loserSelect = new StringSelectMenuBuilder()
+    .setCustomId('mvpLoserSelect')
+    .setPlaceholder('Select the LOSER')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(options);
+  const modal = new ModalBuilder()
+    .setCustomId(`mvpmodal_${match.id}`)
+    .setTitle('🗳️ MVP Votes');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(winnerSelect),
+    new ActionRowBuilder().addComponents(loserSelect)
+  );
+  return modal;
 }
 
 function buildMainMatchEmbed(match) {
@@ -716,6 +747,10 @@ client.once(Events.ClientReady, (c) => {
   for (const g of c.guilds.cache.values()) {
     syncInviteCache(g);
   }
+  const selfHealed = manager.validateAllMatches();
+  if (selfHealed.length) {
+    console.log(`[SELF-HEAL] startup sweep repaired ${selfHealed.length} match(es):`, selfHealed);
+  }
 });
 
 setInterval(async () => {
@@ -732,6 +767,17 @@ setInterval(async () => {
     jailModule.unjailUser(j.userId);
   }
 }, 60000);
+
+setInterval(() => {
+  try {
+    const repaired = manager.validateAllMatches();
+    if (repaired.length) {
+      console.log(`[SELF-HEAL] sweep repaired ${repaired.length} match(es)`, repaired.map(r => `${r.id}:${r.issues.join(',')}`));
+    }
+  } catch (e) {
+    console.log('[SELF-HEAL] sweep error:', e.message);
+  }
+}, 5 * 60 * 1000);
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
@@ -847,16 +893,6 @@ async function cleanupOldMessages(channel) {
 async function getPlayerName(guild, userId) {
   const m = await guild.members.fetch(userId).catch(() => null);
   return m ? (m.displayName || m.user.username) : userId;
-}
-
-async function teamPlayerSelectOptions(guild, teamIds) {
-  const options = [];
-  for (const uid of teamIds) {
-    const member = await guild.members.fetch(uid).catch(() => null);
-    const name = member ? (member.displayName || member.user.username) : uid;
-    options.push(new StringSelectMenuOptionBuilder().setLabel(name.slice(0, 90)).setValue(uid));
-  }
-  return options;
 }
 
 async function dumpMatchChat(guild, match) {
@@ -1130,6 +1166,86 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('mvpmodal_')) {
+    const matchId = interaction.customId.slice('mvpmodal_'.length);
+    const match = manager.getMatch(matchId);
+    if (!match) {
+      return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+    }
+    if (match.status !== 'full') {
+      return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
+    }
+    const captains = [match.team1[0], match.team2[0]].filter(Boolean);
+    if (!captains.includes(interaction.user.id)) {
+      return interaction.reply({ content: '❌ Only the first player of each team can vote!', ephemeral: true });
+    }
+
+    const winnerId = (interaction.fields.getSelectMenuValues('mvpWinnerSelect') || [])[0];
+    const loserId = (interaction.fields.getSelectMenuValues('mvpLoserSelect') || [])[0];
+    if (!winnerId || !loserId) {
+      return interaction.reply({ content: '❌ Select both a winner and a loser.', ephemeral: true });
+    }
+    if (winnerId === loserId) {
+      return interaction.reply({ content: '❌ Winner and loser must be different players.', ephemeral: true });
+    }
+    const roster = new Set([...match.team1, ...match.team2]);
+    if (!roster.has(winnerId) || !roster.has(loserId)) {
+      return interaction.reply({ content: '❌ That player is not part of this match.', ephemeral: true });
+    }
+
+    const voterId = interaction.user.id;
+    const teamOf = id => match.team1.includes(id) ? 1 : 2;
+    const otherId = voterId === match.team1[0] ? match.team2[0] : match.team1[0];
+
+    const recordSide = (isWinner, player) => {
+      const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
+      const setKey = isWinner ? 'winnerVoteSet' : 'loserVoteSet';
+      if (match[setKey]) return { already: true };
+      match[votesKey][voterId] = { team: teamOf(player), player };
+      const other = otherId ? match[votesKey][otherId] : null;
+      if (other && other.team === teamOf(player) && other.player === player) {
+        if (isWinner) {
+          match.winnerTeam = match[votesKey][voterId].team;
+          match.mvpWinnerId = player;
+        } else {
+          match.loserTeam = match[votesKey][voterId].team;
+          match.mvpLoserId = player;
+        }
+        match[setKey] = true;
+        match.resultStatus = null;
+        return { agreed: true, player };
+      }
+      if (other) {
+        match[votesKey] = {};
+        match.resultStatus = `❌ ${isWinner ? 'Winner' : 'Loser'} votes didn't match! Please vote again.`;
+        return { mismatch: true };
+      }
+      return { waiting: true };
+    };
+
+    const w = recordSide(true, winnerId);
+    const l = recordSide(false, loserId);
+    manager.persistMatches();
+    await updateResultBox(interaction.guild, match);
+
+    let msg;
+    if (w.mismatch || l.mismatch) {
+      const failed = w.mismatch ? 'Winner' : 'Loser';
+      msg = `❌ ${failed} votes didn't match, please try again!`;
+      interaction.channel.send({ content: `❌ **${failed} votes didn't match, please vote again!** (captains <@${match.team1[0]}> & <@${match.team2[0]}>)` }).catch(() => {});
+    } else if (w.agreed && l.agreed) {
+      msg = `✅ Both captains agree! 🏆 Winner: <@${winnerId}> • 💪 Loser: <@${loserId}>`;
+    } else {
+      const otherName = otherId ? await getPlayerName(interaction.guild, otherId) : 'the other captain';
+      msg = `✅ Vote saved! Waiting for **${otherName}** to vote.`;
+    }
+    await interaction.reply({ content: msg, ephemeral: true });
+    if (match.winnerVoteSet && match.loserVoteSet) {
+      await settleMatchResult(interaction.guild, match);
+    }
+    return;
+  }
+
   if (interaction.isModalSubmit() && interaction.customId.startsWith('joinkey_')) {
     const team = parseInt(interaction.customId.slice(interaction.customId.lastIndexOf('_') + 1));
     const matchId = interaction.customId.slice('joinkey_'.length, interaction.customId.lastIndexOf('_'));
@@ -1149,79 +1265,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isStringSelectMenu()) {
-    const cid = interaction.customId;
-    let isWinner = null;
-    let matchId = null;
-
-    if (cid.startsWith('mvwplayer_')) {
-      isWinner = true;
-      matchId = cid.slice('mvwplayer_'.length);
-    } else if (cid.startsWith('mvlplayer_')) {
-      isWinner = false;
-      matchId = cid.slice('mvlplayer_'.length);
-    }
-    if (matchId === null || isWinner === null) return;
-
-    const match = manager.getMatch(matchId);
-    if (!match) {
-      console.log(`[SEL] match not found for customId=${cid}`);
-      return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
-    }
-
-    const voterId = interaction.user.id;
-    const captains = [match.team1[0], match.team2[0]].filter(Boolean);
-    if (!captains.includes(voterId)) {
-      return interaction.update({ content: '❌ Only the first player of each team can vote!', components: [] });
-    }
-    if (isWinner ? match.winnerVoteSet : match.loserVoteSet) {
-      return interaction.update({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already finalized.`, components: [] });
-    }
-    const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
-    if ((match[votesKey] || {})[voterId]) {
-      return interaction.update({ content: '✅ You already voted! Waiting for the other captain to vote.', components: [] });
-    }
-
-    const selected = interaction.values[0];
-    const team = match.team1.includes(selected) ? 1 : (match.team2.includes(selected) ? 2 : null);
-    if (!team) {
-      return interaction.update({ content: '❌ That player is not part of this match.', components: [] });
-    }
-
-    match[votesKey][voterId] = { team, player: selected };
-    manager.persistMatches();
-
-    const myVote = match[votesKey][voterId];
-    const otherId = voterId === match.team1[0] ? match.team2[0] : match.team1[0];
-    const otherVote = otherId ? match[votesKey][otherId] : null;
-
-    if (otherVote && otherVote.team === myVote.team && otherVote.player === myVote.player) {
-      if (isWinner) {
-        match.winnerTeam = myVote.team;
-        match.mvpWinnerId = myVote.player;
-        match.winnerVoteSet = true;
-      } else {
-        match.loserTeam = myVote.team;
-        match.mvpLoserId = myVote.player;
-        match.loserVoteSet = true;
-      }
-      match.resultStatus = null;
-      manager.persistMatches();
-      await updateResultBox(interaction.guild, match);
-      await interaction.update({ content: `✅ Both captains agree! ${isWinner ? '🏆 Winner' : '💪 Loser'} MVP: <@${myVote.player}>`, components: [] });
-      if (match.winnerVoteSet && match.loserVoteSet) {
-        await settleMatchResult(interaction.guild, match);
-      }
-    } else if (otherVote) {
-      match[votesKey] = {};
-      match.resultStatus = `❌ ${isWinner ? 'Winner' : 'Loser'} votes didn't match! Please vote again.`;
-      manager.persistMatches();
-      await updateResultBox(interaction.guild, match);
-      await interaction.update({ content: `❌ Votes aren't the same, please try again!`, components: [] });
-      interaction.channel.send({ content: `❌ **${isWinner ? 'Winner' : 'Loser'} votes didn't match, please vote again!** (captains <@${match.team1[0]}> & <@${match.team2[0]}>)` }).catch(() => {});
-    } else {
-      const otherName = otherId ? await getPlayerName(interaction.guild, otherId) : 'the other captain';
-      await interaction.update({ content: `✅ Vote saved! Waiting for **${otherName}** to vote.`, components: [] });
-    }
+    // Legacy MVP selects here are replaced by the 🗳️ Vote MVP modal.
+    return interaction.reply({ content: '⚠️ The MVP vote now uses the 🗳️ Vote MVP button above.', ephemeral: true });
   }
 
   if (interaction.isButton()) {
@@ -1307,40 +1352,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.showModal(keyModal);
     }
 
-    if (action === 'mvpwinner' || action === 'mvploser') {
-      const isWinner = action === 'mvpwinner';
+    if (action === 'mvpvote' || action === 'mvpwinner' || action === 'mvploser') {
+      if (match.status !== 'full') {
+        return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
+      }
       const captains = [match.team1[0], match.team2[0]].filter(Boolean);
       if (!captains.includes(interaction.user.id)) {
         return interaction.reply({ content: '❌ Only the **first player of each team** can vote!', ephemeral: true });
       }
-      if (isWinner ? match.winnerVoteSet : match.loserVoteSet) {
-        return interaction.reply({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already finalized.`, ephemeral: true });
+      if (match.winnerVoteSet && match.loserVoteSet) {
+        return interaction.reply({ content: '✅ MVP votes were already finalized.', ephemeral: true });
       }
-      const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
-      if ((match[votesKey] || {})[interaction.user.id]) {
-        return interaction.reply({ content: '✅ You already voted! Waiting for the other captain to vote.', ephemeral: true });
-      }
-      const list = [...match.team1, ...match.team2];
-      const opts = await teamPlayerSelectOptions(interaction.guild, list);
-      if (opts.length === 0) {
+      const roster = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
+      if (roster.length === 0) {
         return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
       }
-      const playerSelect = new StringSelectMenuBuilder()
-        .setCustomId(`${isWinner ? 'mvwplayer' : 'mvlplayer'}_${match.id}`)
-        .setPlaceholder(`Select the ${isWinner ? 'WINNER' : 'LOSER'} MVP`)
-        .addOptions(opts);
-      const cancelVoteRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`votecancel_${match.id}`).setLabel('❌ Cancel Vote').setStyle(ButtonStyle.Danger)
-      );
-      return interaction.reply({
-        content: `${isWinner ? '🏆' : '💪'} Choose the ${isWinner ? 'winner' : 'loser'} MVP:`,
-        components: [new ActionRowBuilder().addComponents(playerSelect), cancelVoteRow],
-        ephemeral: true
-      });
+      return interaction.showModal(buildMvpModal(interaction.guild, match));
     }
 
     if (action === 'votecancel') {
-      return interaction.reply({ content: '✅ Vote cancelled.', ephemeral: true });
+      const voterId = interaction.user.id;
+      const changed = [];
+      for (const key of ['winnerVotes', 'loserVotes']) {
+        const setKey = key === 'winnerVotes' ? 'winnerVoteSet' : 'loserVoteSet';
+        if (match[setKey]) continue;
+        if (match[key] && match[key][voterId]) {
+          delete match[key][voterId];
+          changed.push(key === 'winnerVotes' ? 'winner' : 'loser');
+        }
+      }
+      manager.persistMatches();
+      await updateResultBox(interaction.guild, match);
+      return interaction.reply({
+        content: changed.length
+          ? `✅ Your ${changed.join(' & ')} vote was cleared. Vote again with 🗳️ Vote MVP.`
+          : 'ℹ️ No pending votes to clear (agreed votes are locked).',
+        ephemeral: true
+      });
     }
 
     if (action === 'staffreq') {
@@ -1743,6 +1791,57 @@ client.on(Events.MessageCreate, async (message) => {
     } else {
       await message.reply(`♻️ **Votes reset & points refunded!**\n${refunded.join('\n')}\n\nRe-vote with \`!w @player\` / \`!l @player\`.`);
     }
+  } else if (content.startsWith('!endcancel')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can force-end a match!');
+    }
+    const target = message.mentions.users.first();
+    let match = null;
+    if (target) {
+      match = manager.getAllMatches().find(m =>
+        m.status === 'full' &&
+        ((m.team1 || []).includes(target.id) || (m.team2 || []).includes(target.id))
+      ) || manager.getAllMatches().find(m => m.creatorId === target.id);
+    } else {
+      match = manager.getAllMatches().find(m => m.creatorId === message.author.id && m.status === 'full')
+        || manager.getAllMatches().find(m => m.status === 'full');
+    }
+    if (!match) return message.reply('❌ No active full match found to end.');
+    const endMode = match.mode || mode;
+
+    const refunded = [];
+    if (match.winnerId) {
+      storage.removePoints(match.winnerId, WINNER_POINTS, 'win', endMode);
+      refunded.push(`🏆 <@${match.winnerId}> (${WINNER_POINTS} pts refunded)`);
+    }
+    if (match.loserId) {
+      storage.removePoints(match.loserId, LOSER_POINTS, 'loss', endMode);
+      refunded.push(`💪 <@${match.loserId}> (${LOSER_POINTS} pts refunded)`);
+    }
+
+    await manager.deleteVoiceChannels(message.guild, match);
+    await manager.deleteChannel(message.guild, match);
+    if (match.joinTimeout) {
+      clearTimeout(match.joinTimeout);
+      match.joinTimeout = null;
+    }
+    if (match.configTimeout) {
+      clearTimeout(match.configTimeout);
+      match.configTimeout = null;
+    }
+    const endChannel = message.guild.channels.cache.get(match.channelId2);
+    if (endChannel && match.resultMessageId) {
+      const endMsg = await endChannel.messages.fetch(match.resultMessageId).catch(() => null);
+      if (endMsg) {
+        await endMsg.edit({ content: `🛑 **Match force-ended by staff** (<@${message.author.id}>)`, embeds: [], components: [] }).catch(() => {});
+      }
+    }
+    manager.removeMatch(match.id);
+
+    await message.reply(
+      `🛑 **Match force-ended.** No points were awarded.` +
+      (refunded.length ? `\nRefunds:\n${refunded.join('\n')}` : '')
+    );
   } else if (content.startsWith('!w') || content.startsWith('!l')) {
     const isWin = content.startsWith('!w');
     const target = message.mentions.users.first();

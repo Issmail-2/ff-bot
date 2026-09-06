@@ -63,12 +63,93 @@ function ensureMatchesFile() {
   if (!fs.existsSync(MATCHES_FILE)) fs.writeFileSync(MATCHES_FILE, JSON.stringify([]));
 }
 
+function validateMatch(match) {
+  const issues = [];
+  match.team1 = Array.isArray(match.team1) ? match.team1 : [];
+  match.team2 = Array.isArray(match.team2) ? match.team2 : [];
+  if (match.teamSize && ![2, 3, 4].includes(match.teamSize)) match.teamSize = null;
+  match.team1 = [...new Set(match.team1.filter(id => typeof id === 'string' && /^\d+$/.test(id)))];
+  match.team2 = [...new Set(match.team2.filter(id => typeof id === 'string' && /^\d+$/.test(id)))];
+  if (match.teamSize) {
+    if (match.team1.length > match.teamSize) { match.team1 = match.team1.slice(0, match.teamSize); issues.push('team1-overfull-trimmed'); }
+    if (match.team2.length > match.teamSize) { match.team2 = match.team2.slice(0, match.teamSize); issues.push('team2-overfull-trimmed'); }
+  }
+  match.voiceChannels = Array.isArray(match.voiceChannels) ? match.voiceChannels : [];
+  match.originalChannels = (match.originalChannels && typeof match.originalChannels === 'object') ? match.originalChannels : {};
+  match.winnerVotes = (match.winnerVotes && typeof match.winnerVotes === 'object') ? match.winnerVotes : {};
+  match.loserVotes = (match.loserVotes && typeof match.loserVotes === 'object') ? match.loserVotes : {};
+
+  const roster = new Set([...match.team1, ...match.team2]);
+  for (const key of ['winnerVotes', 'loserVotes']) {
+    for (const uid of Object.keys(match[key])) {
+      const v = match[key][uid];
+      if (!roster.has(uid) || !v || typeof v !== 'object' || (v.team !== 1 && v.team !== 2) || typeof v.player !== 'string' || !v.player) {
+        delete match[key][uid];
+        issues.push(key + '-entry-removed');
+      } else {
+        match[key][uid].team = match.team1.includes(uid) ? 1 : 2;
+      }
+    }
+  }
+
+  if (match.winnerVoteSet && (!match.mvpWinnerId || !match.winnerTeam)) {
+    match.winnerVoteSet = false;
+    issues.push('winner-result-incomplete-cleared');
+  }
+  if (match.loserVoteSet && (!match.mvpLoserId || !match.loserTeam)) {
+    match.loserVoteSet = false;
+    issues.push('loser-result-incomplete-cleared');
+  }
+  if (match.resultStatus !== null && match.resultStatus !== undefined && !match.resultStatus) {
+    match.resultStatus = null;
+    issues.push('result-status-normalized');
+  }
+
+  if (match.status === 'full') {
+    if (!match.teamSize || match.team1.length < match.teamSize || match.team2.length < match.teamSize) {
+      match.status = 'waiting';
+      issues.push('roster-depleted-rolled-back');
+    }
+  } else if (match.status !== 'waiting') {
+    match.status = 'waiting';
+    issues.push('status-normalized');
+  }
+  return { match, issues };
+}
+
+function validateAllMatches() {
+  const repaired = [];
+  let changed = false;
+  for (const [id, match] of activeMatches) {
+    const res = validateMatch(match);
+    if (res.issues.length) {
+      repaired.push({ id, issues: res.issues });
+      changed = true;
+    }
+  }
+  if (changed) persistMatches();
+  return repaired;
+}
+
 function loadMatches() {
   ensureMatchesFile();
   try {
     const data = JSON.parse(fs.readFileSync(MATCHES_FILE, 'utf8'));
     if (Array.isArray(data)) {
-      data.forEach(m => activeMatches.set(m.id, m));
+      let changed = false;
+      data.forEach(m => {
+        if (!m || typeof m !== 'object' || !m.id || !m.creatorId) {
+          changed = true;
+          return;
+        }
+        const res = validateMatch(m);
+        if (res.issues.length) {
+          console.log(`[SELF-HEAL] match ${m.id} repaired on load: ${res.issues.join(', ')}`);
+          changed = true;
+        }
+        activeMatches.set(m.id, m);
+      });
+      if (changed) persistMatches();
     }
   } catch (e) {
     console.log('Could not load matches:', e.message);
@@ -498,6 +579,8 @@ module.exports = {
   getPendingOrFullMatch,
   getActiveMatchForPlayer,
   isSuppressed,
+  validateMatch,
+  validateAllMatches,
   logMatch,
   getMatchLogs,
   clearAllMatches,
