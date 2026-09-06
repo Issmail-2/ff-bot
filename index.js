@@ -855,7 +855,7 @@ function buildStoreEmbed(items) {
     const icon = it.type === 'role' ? '👑' : '💎';
     const rolePart = it.type === 'role' && it.roleId ? ` → <@&${it.roleId}>` : '';
     const stockPart = it.stock !== null && it.stock !== undefined ? `\n📦 Stock: ${storeModule.isSoldOut(it) ? '**SOLD OUT**' : `**${it.stock}** left`}` : '';
-    return `${i + 1}. ${icon} **${it.name}** — **${it.cost} pts**${rolePart}${stockPart}`;
+    return `${i + 1}. ${icon} **${it.name}** — **${it.cost} pts** (ID: \`${it.id}\`)${rolePart}${stockPart}`;
   }).join('\n') || '*No items yet. Supervisors can add items with `&storeadd`.*';
   return new EmbedBuilder()
     .setTitle('🛒 STORE')
