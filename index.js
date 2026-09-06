@@ -874,10 +874,12 @@ function buildStoreButtons(items) {
   )];
 }
 
-async function syncStoreEmbed(guild) {
+async function syncStoreEmbed(guild, channelOverride) {
   if (!guild) return;
-  const channel = await ensureStoreChannel(guild);
+  let channel = channelOverride;
+  if (!channel) channel = await ensureStoreChannel(guild);
   if (!channel) return;
+  config.storeChannelId = channel.id;
   try {
     const msgs = await channel.messages.fetch({ limit: 30 });
     for (const m of msgs.values()) {
@@ -1903,8 +1905,8 @@ client.on(Events.MessageCreate, async (message) => {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can refresh the store!');
     }
-    await syncStoreEmbed(message.guild);
-    return message.reply(`✅ Store updated in ${config.storeChannelId ? `<#${config.storeChannelId}>` : 'the **store** channel'}.`);
+    await syncStoreEmbed(message.guild, message.channel);
+    return message.reply(`✅ Store updated here (<#${message.channel.id}>) - old message replaced.`);
   }
 
   if (content.startsWith('&remove')) {
