@@ -12,6 +12,8 @@ if (!config.pointsFile) config.pointsFile = './data/points.json';
 if (!config.logsCategoryId) config.logsCategoryId = config.modes.amo.logsCategoryId;
 if (!config.logsChannelId) config.logsChannelId = process.env.LOGS_CHANNEL_ID || '1545366915180924938';
 if (!config.infoChannelId) config.infoChannelId = process.env.INFO_CHANNEL_ID || '1545379695363620874';
+if (!config.storeChannelId) config.storeChannelId = process.env.STORE_CHANNEL_ID || '';
+if (!config.ticketCategoryId) config.ticketCategoryId = process.env.TICKET_CATEGORY_ID || '';
 if (!config.rankOneRoleId) config.rankOneRoleId = process.env.RANK_ONE_ROLE_ID || '';
 if (!config.setResultRoles) {
   config.setResultRoles = process.env.SET_RESULT_ROLE_IDS ? process.env.SET_RESULT_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310', '1466082863115145441'];
@@ -69,6 +71,34 @@ const WINNER_POINTS = config.matchPoints.winner;
 const LOSER_POINTS = config.matchPoints.loser;
 
 const SERVER_ID = '1423528601701187717';
+
+function errLog(...args) {
+  let msg;
+  try {
+    msg = args.map(a => {
+      if (a instanceof Error) return `${a.name}: ${a.message}\n${a.stack || ''}`;
+      if (typeof a === 'string') return a;
+      try { return JSON.stringify(a); } catch { return String(a); }
+    }).join(' | ');
+  } catch {
+    msg = String(args);
+  }
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.error(line);
+  try {
+    const fs = require('fs');
+    const dir = require('path').join(__dirname, 'data');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(require('path').join(dir, 'error.log'), line + '\n');
+  } catch { /* ignore */ }
+}
+
+process.on('uncaughtException', (e) => {
+  errLog('UNCAUGHT EXCEPTION', e);
+});
+process.on('unhandledRejection', (r) => {
+  errLog('UNHANDLED REJECTION', r && (r.stack || r) || r);
+});
 
 function getModeByChannel(channelId) {
   if (config.modes.esport && config.modes.esport.matchChannelId === channelId) return 'esport';
@@ -208,26 +238,27 @@ const COMMANDS_INFO = `🎮 **HOW TO USE THE BOT - FREE FIRE MATCHES**
 ━━━━━━━━━━━━━━━━━━━━━━━━
 1️⃣ Join one of the **lobby voice channels**.
 2️⃣ Host a match: type \`!play 2v2\`, \`!play 3v3\` or \`!play 4v4\` (in the matches channel), or \`!esport 2v2/3v3/4v4\` in the esport channel.
-3️⃣ Click **🏠 Room Config**, enter the Room ID / Password (and an optional join key).
-4️⃣ Players join Team 1 / Team 2 with the join buttons (key required if the host set one).
-5️⃣ When both teams are full, a **result box** appears - the 2 team captains vote the **MVP** for winner and loser.
+3️⃣ Click **🏠 Room Config**, enter the Room ID / Password (and an optional room name).
+4️⃣ Players join Team 1 / Team 2 with the join buttons (key required if the host set one). When the room is full the roster is **locked** - nobody can leave or join.
+5️⃣ When both teams are full, a **result box** appears - the 2 team captains vote the **MVP** for winner and loser (top 2 players per team only).
 6️⃣ Points are added automatically: Winner +50, Winner MVP +80, Loser +10, Loser MVP +30.
-7️⃣ Check ranks with the **Rank #** nicknames or \`!leaderboard\`.
+7️⃣ To cancel a **full** match, players press **❌ Cancel Match** - each team needs 2 votes to auto-cancel (you can also revoke your vote with **❌ Cancel My Vote**).
+8️⃣ Check ranks with the **Rank #** nicknames or \`!leaderboard\`.
 
 👑 **RANK #1 PRIZE - AUTO ROLE**
 The **#1 ranked player** automatically receives the Rank #1 role!
 
-🛒 **STORE**
-\`&store\` - open the store and exchange your **points** for roles or Free Fire diamonds if you buy them, staff will deliver them to you.
-Supervisors add items: \`&storeadd <name>|<cost>|<role|diamond>|<roleId (role only)>\`
+🛒 **STORE** (in the **\`store\`** channel)
+The store is a dedicated channel with a fixed **STORE / Available Items** embed and **Buy** buttons. Role items are granted instantly (points deducted only after the role is granted), **gems** open a private ticket with staff (no auto deduction - staff handles payment/delivery).
+Supervisors add items: \`&storeadd <name>|<cost>|<role|gems>|<roleId (role only)>\`
 Remove items: \`&storeremove <itemId>\`
+Refresh: \`&refreshstore\`
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
 \`!play 2v2 | 3v3 | 4v4\` - host a match
 \`!esport 2v2 | 3v3 | 4v4\` - host an esport match
 \`!leaderboard\` - show the top players
-\`&store\` - open the reward store
 
 🔧 **SUPERVISORS / ADMINS** (<@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310>)
 \`!setpoints @user points win/loss\` - adjust a player's points (also: <@&1450212500581646460> and <@1177600499298599035>)
@@ -239,8 +270,9 @@ Remove items: \`&storeremove <itemId>\`
 \`&remove <userID> <points>\` - remove points from a player
 \`&clear <n>\` - delete up to 100 messages (1-100)
 \`&commands\` - repost this commands list
-\`&storeadd <name>|<cost>|<role|diamond>|<roleId>\` - add a store item
+\`&storeadd <name>|<cost>|<role|gems>|<roleId>\` - add a store item
 \`&storeremove <id>\` - remove a store item
+\`&refreshstore\` - re-sync the store channel embed
 \`&blacklist <userID> <duration> <reason>\` - blacklist a player from matches
 \`&unblacklist <userID>\` - unblacklist a player
 
@@ -249,7 +281,7 @@ Remove items: \`&storeremove <itemId>\`
 \`&unjail <userID>\` - release a jailed player
 
 ⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\`
-💠 Store: \`role\` items auto-grant the role, \`diamond\` items notify staff to deliver.`;
+💠 Store: \`role\` items auto-grant the role, \`gems\` open a private ticket handled by staff.`;
 
 function buildInfoEmbeds() {
   const MAX = 4000;
@@ -550,11 +582,67 @@ async function cancelMatch(guild, match, cancelText) {
     if (msg) await msg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
   }
   const roomChannel = guild.channels.cache.get(match.channelId2);
-  if (roomChannel && match.resultMessageId && match.resultMessageId !== match.message) {
-    const rmsg = await roomChannel.messages.fetch(match.resultMessageId).catch(() => null);
-    if (rmsg) await rmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
+  if (roomChannel) {
+    if (match.resultMessageId && match.resultMessageId !== match.message) {
+      const rmsg = await roomChannel.messages.fetch(match.resultMessageId).catch(() => null);
+      if (rmsg) await rmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
+    }
+    if (match.cancelMsgId && match.cancelMsgId !== match.resultMessageId) {
+      const cmsg = await roomChannel.messages.fetch(match.cancelMsgId).catch(() => null);
+      if (cmsg) await cmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
+    }
   }
   manager.removeMatch(match.id);
+}
+
+const CANCEL_NEEDED = 2;
+
+function buildCancelVoteEmbed(match) {
+  const cancelVotes = match.cancelVotes || { 1: [], 2: [] };
+  const list = (team) => {
+    const votes = cancelVotes[team] || [];
+    if (votes.length === 0) return '— (no votes yet)';
+    return votes.map(id => `<@${id}>`).join(' ');
+  };
+  const t1Done = (cancelVotes[1] || []).length >= CANCEL_NEEDED;
+  const t2Done = (cancelVotes[2] || []).length >= CANCEL_NEEDED;
+  const status = (t1Done && t2Done) ? '✅ **CANCEL APPROVED — the match will be cancelled now!**' : '⏳ Waiting for votes...';
+  return new EmbedBuilder()
+    .setTitle('❌ Cancel Match')
+    .setColor(0xE74C3C)
+    .setDescription(
+      `To cancel the match, **${CANCEL_NEEDED} players from EVERY team** must vote.\n` +
+      `Each player can vote **once**. The match keeps running until the vote passes.\n\n` +
+      `${config.emojis.team1} **Team 1** (${(cancelVotes[1] || []).length}/${CANCEL_NEEDED}):\n${list(1)}\n\n` +
+      `${config.emojis.team2} **Team 2** (${(cancelVotes[2] || []).length}/${CANCEL_NEEDED}):\n${list(2)}\n\n` +
+      `**Status:** ${status}`
+    );
+}
+
+async function openCancelVote(guild, match, interaction) {
+  const roomChannel = guild.channels.cache.get(match.channelId2) || guild.channels.cache.get(match.channelId);
+  if (!roomChannel) {
+    return interaction.reply({ content: '❌ Could not find the match channel.', ephemeral: true });
+  }
+  const embed = buildCancelVoteEmbed(match);
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`cancelfvote_${match.id}`).setLabel('🗳️ Vote for Cancel').setStyle(ButtonStyle.Danger)
+  );
+  let msg = null;
+  if (match.cancelMsgId) {
+    const existing = await roomChannel.messages.fetch(match.cancelMsgId).catch(() => null);
+    if (existing) msg = existing;
+  }
+  if (msg) {
+    await msg.edit({ embeds: [embed], components: [row] }).catch(() => {});
+  } else {
+    const sent = await roomChannel.send({ content: `⚠️ **A cancel vote has started!** Match ${match.teamSize}v${match.teamSize} — press the button to vote.`, embeds: [embed], components: [row] }).catch(() => null);
+    if (sent) {
+      match.cancelMsgId = sent.id;
+      manager.persistMatches();
+    }
+  }
+  return interaction.reply({ content: '❌ **Move to cancel started.** Need 2 votes from each team. Press **🗳️ Vote for Cancel** in the match room.', ephemeral: true });
 }
 
 function buildResultButtons(match) {
@@ -570,35 +658,16 @@ function buildResultButtons(match) {
   return [row1, row2];
 }
 
-function buildMvpModal(guild, match) {
-  const roster = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
-  const options = roster.map(id => {
+function mvpPlayerOptions(guild, match) {
+  const picks = [...(match.team1 || []).slice(0, 2), ...(match.team2 || []).slice(0, 2)];
+  return picks.map(id => {
     const member = guild.members.cache.get(id);
     const name = member ? (member.displayName || member.user.username) : id;
+    const team = match.team1.includes(id) ? 1 : 2;
     return new StringSelectMenuOptionBuilder()
-      .setLabel(`Team ${match.team1.includes(id) ? 1 : 2} • ${name}`.slice(0, 100))
+      .setLabel(`Team ${team} • ${name}`.slice(0, 100))
       .setValue(id);
   });
-  const winnerSelect = new StringSelectMenuBuilder()
-    .setCustomId('mvpWinnerSelect')
-    .setPlaceholder('Select the WINNER (MVP)')
-    .setMinValues(1)
-    .setMaxValues(1)
-    .addOptions(options);
-  const loserSelect = new StringSelectMenuBuilder()
-    .setCustomId('mvpLoserSelect')
-    .setPlaceholder('Select the LOSER')
-    .setMinValues(1)
-    .setMaxValues(1)
-    .addOptions(options);
-  const modal = new ModalBuilder()
-    .setCustomId(`mvpmodal_${match.id}`)
-    .setTitle('🗳️ MVP Votes');
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(winnerSelect),
-    new ActionRowBuilder().addComponents(loserSelect)
-  );
-  return modal;
 }
 
 function buildMainMatchEmbed(match) {
@@ -740,6 +809,185 @@ function buildMatchButtons(match, userId) {
   return components;
 }
 
+async function ensureStoreChannel(guild) {
+  if (config.storeChannelId) {
+    const existing = guild.channels.cache.get(config.storeChannelId);
+    if (existing) return existing;
+  }
+  let ch = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === 'store');
+  if (!ch) {
+    try {
+      ch = await guild.channels.create({ name: 'store', type: ChannelType.GuildText });
+    } catch (e) {
+      console.log('[STORE] create store channel failed:', e.message);
+      return null;
+    }
+  }
+  config.storeChannelId = ch.id;
+  return ch;
+}
+
+function buildStoreEmbed(items) {
+  const list = items.map((it, i) => {
+    const icon = it.type === 'role' ? '👑' : '💎';
+    const rolePart = it.type === 'role' && it.roleId ? ` → <@&${it.roleId}>` : '';
+    return `${i + 1}. ${icon} **${it.name}** — **${it.cost} pts**${rolePart}`;
+  }).join('\n') || '*No items yet. Supervisors can add items with `&storeadd`.*';
+  return new EmbedBuilder()
+    .setTitle('🛒 STORE')
+    .setColor(0xFFA500)
+    .setDescription(`**Available Items**\n\n${list}\n\nClick a **Buy** button below. Role items are granted instantly, gems open a private ticket handled by staff.`);
+}
+
+function buildStoreButtons(items) {
+  const rows = [];
+  let row = null;
+  for (const it of items) {
+    if (!row || row.components.length >= 5) {
+      row = new ActionRowBuilder();
+      rows.push(row);
+    }
+    row.addComponents(new ButtonBuilder()
+      .setCustomId(`buyitem_${it.id}`)
+      .setLabel(`Buy: ${it.name}`.slice(0, 80))
+      .setStyle(it.type === 'role' ? ButtonStyle.Success : ButtonStyle.Primary));
+  }
+  return rows;
+}
+
+async function syncStoreEmbed(guild) {
+  if (!guild) return;
+  const channel = await ensureStoreChannel(guild);
+  if (!channel) return;
+  try {
+    const msgs = await channel.messages.fetch({ limit: 30 });
+    for (const m of msgs.values()) {
+      if (m.author.id === client.user.id && m.embeds && m.embeds[0] && m.embeds[0].title && String(m.embeds[0].title).toLowerCase().includes('store')) {
+        await m.delete().catch(() => {});
+      }
+    }
+  } catch (e) {
+    console.log('[STORE] cleanup old messages failed:', e.message);
+  }
+  const items = storeModule.getItems();
+  const embed = buildStoreEmbed(items);
+  const rows = buildStoreButtons(items);
+  await channel.send({ embeds: [embed], components: rows }).catch(e => console.log('[STORE] sync send failed:', e.message));
+  console.log(`[STORE] store embed synced in ${channel.id}`);
+}
+
+async function openPurchaseTicket(interaction, item) {
+  const guild = interaction.guild;
+  const existing = guild.channels.cache.find(c =>
+    c.type === ChannelType.GuildText && c.name && c.name.startsWith(`ticket-${interaction.user.id}-`)
+  );
+  if (existing) {
+    return interaction.reply({ content: `You already have an open ticket: <#${existing.id}>`, ephemeral: true });
+  }
+
+  let category = config.ticketCategoryId ? guild.channels.cache.get(config.ticketCategoryId) : null;
+  if (!category) {
+    category = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === 'tickets');
+  }
+  if (!category) {
+    try {
+      category = await guild.channels.create({
+        name: '🎫 Tickets',
+        type: ChannelType.GuildCategory,
+        permissionOverwrites: [{ id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] }]
+      });
+      config.ticketCategoryId = category.id;
+    } catch (e) {
+      console.log('[TICKET] category create failed:', e.message);
+      return interaction.reply({ content: '❌ Could not create the tickets category. Check bot permissions.', ephemeral: true });
+    }
+  }
+
+  const staffIds = [...(config.staffRoles || []), ...(config.adminRoles || [])].filter(Boolean);
+  const profile = await guild.members.fetch(interaction.user.id).catch(() => null);
+  const name = profile ? (profile.displayName || profile.user.username) : interaction.user.username;
+
+  const overwrites = [
+    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+    { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }
+  ];
+  if (guild.members.me) {
+    overwrites.push({
+      id: guild.members.me.id,
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels]
+    });
+  }
+  for (const rid of staffIds) {
+    overwrites.push({ id: rid, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels] });
+  }
+
+  let channel;
+  try {
+    channel = await guild.channels.create({
+      name: `ticket-${interaction.user.id}-${item.id}`.slice(0, 100),
+      type: ChannelType.GuildText,
+      parent: category.id,
+      permissionOverwrites: overwrites
+    });
+  } catch (e) {
+    console.log('[TICKET] channel create failed:', e.message);
+    return interaction.reply({ content: '❌ Could not open the ticket. Check bot permissions.', ephemeral: true });
+  }
+
+  const staffMention = staffIds.map(id => `<@&${id}>`).join(' ');
+  const embed = new EmbedBuilder()
+    .setTitle('🛒 Purchase Ticket — Gems')
+    .setColor(0x00AAFF)
+    .setDescription(
+      `<@${interaction.user.id}> (${name}) requested to buy:\n\n` +
+      `💎 **${item.name}**\n` +
+      `**Price:** ${item.cost} pts\n\n` +
+      `Staff: please handle payment and delivery here. **Points are NOT deducted automatically for gems.**`
+    );
+  await channel.send({ content: `${staffMention || ''}\n<@${interaction.user.id}>`, embeds: [embed] }).catch(() => {});
+  storeModule.logPurchase({
+    id: `${Date.now()}_${interaction.user.id}`, userId: interaction.user.id, itemId: item.id,
+    itemName: item.name, cost: item.cost, type: 'gems', mode: 'amo', claimed: false, at: Date.now(), ticketChannelId: channel.id
+  });
+  return interaction.reply({ content: `✅ Ticket opened for **${item.name}**: <#${channel.id}>`, ephemeral: true });
+}
+
+async function handleBuy(interaction, itemId) {
+  const item = storeModule.getItems().find(i => i.id === String(itemId).trim());
+  if (!item) {
+    return interaction.reply({ content: '❌ That item no longer exists. Ask a supervisor to refresh the store.', ephemeral: true });
+  }
+  if (item.type === 'gems' || item.type === 'diamond') {
+    return openPurchaseTicket(interaction, item);
+  }
+  if (item.type !== 'role') {
+    return interaction.reply({ content: '❌ Unknown item type.', ephemeral: true });
+  }
+  const role = interaction.guild.roles.cache.get(item.roleId);
+  if (!role) {
+    return interaction.reply({ content: '❌ The role for this item no longer exists. Ask a supervisor. (No points deducted)', ephemeral: true });
+  }
+  const member = interaction.member;
+  if (member.roles.cache.has(role.id)) {
+    return interaction.reply({ content: '❌ You already own this role! (No points deducted)', ephemeral: true });
+  }
+  const balance = storage.getPlayerPoints(member.id, 'amo').totalPoints;
+  if (balance < item.cost) {
+    return interaction.reply({ content: `❌ Not enough points! You have **${balance} pts**, this item costs **${item.cost} pts**.`, ephemeral: true });
+  }
+  const granted = await member.roles.add(role).then(() => true).catch(() => false);
+  if (!granted) {
+    return interaction.reply({ content: '❌ Could not grant the role. **No points were deducted.** Ask a supervisor.', ephemeral: true });
+  }
+  storage.adjustPoints(member.id, -item.cost, 'amo');
+  storeModule.logPurchase({
+    id: `${Date.now()}_${interaction.user.id}`, userId: interaction.user.id, itemId: item.id,
+    itemName: item.name, cost: item.cost, type: 'role', roleId: item.roleId, mode: 'amo', claimed: true, at: Date.now()
+  });
+  applyRankOneRole(interaction.guild, computeCombinedRanking()).catch(() => {});
+  return interaction.reply({ content: `✅ Purchased **${item.name}**! Spent **${item.cost} pts**. Role <@&${item.roleId}> granted.`, ephemeral: true });
+}
+
 client.invitesCache = new Map();
 
 async function syncInviteCache(guild) {
@@ -779,6 +1027,17 @@ client.once(Events.ClientReady, (c) => {
   if (selfHealed.length) {
     console.log(`[SELF-HEAL] startup sweep repaired ${selfHealed.length} match(es):`, selfHealed);
   }
+  for (const g of c.guilds.cache.values()) {
+    const restored = manager.getAllMatches();
+    for (const rm of restored) {
+      if (rm.status === 'waiting' && !rm.joinTimeout) {
+        rm.configTimeout = rm.configTimeout || null;
+        rm.joinTimeout = setTimeout(() => timeoutMatch(g, rm.id), 2 * 60 * 1000);
+        console.log(`[RESTORE] re-armed join timeout for ${rm.id}`);
+      }
+    }
+    syncStoreEmbed(g).catch(e => console.log('[STORE] ready sync failed:', e.message));
+  }
 });
 
 setInterval(async () => {
@@ -808,6 +1067,7 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 client.on(Events.MessageCreate, async (message) => {
+  try {
   if (message.author.bot) return;
 
   const content = message.content.trim();
@@ -886,6 +1146,10 @@ client.on(Events.MessageCreate, async (message) => {
     const dummy = message.author.id;
     while (match.team1.length < match.teamSize) match.team1.push(dummy);
     while (match.team2.length < match.teamSize) match.team2.push(dummy);
+    match.team1 = [...new Set(match.team1)];
+    match.team2 = [...new Set(match.team2)];
+    for (let i = 0; match.team1.length < match.teamSize; i++) match.team1.push(`mockT1_${i}`);
+    for (let i = 0; match.team2.length < match.teamSize; i++) match.team2.push(`mockT2_${i}`);
     manager.persistMatches();
     try {
       await startFullMatch(message.guild, match);
@@ -895,6 +1159,9 @@ client.on(Events.MessageCreate, async (message) => {
       await message.reply(`❌ Force-full failed: ${e.message}`);
     }
     return;
+  }
+  } catch (e) {
+    errLog(`MessageCreate error (${message.content}):`, e);
   }
 });
 
@@ -1096,43 +1363,7 @@ async function performJoin(interaction, match, team) {
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (interaction.isStringSelectMenu() && interaction.customId === 'store_menu') {
-    const mode = getModeByChannel(interaction.channel.id);
-    const item = storeModule.getItems().find(i => i.id === interaction.values[0]);
-    if (!item) {
-      return interaction.reply({ content: '❌ That item no longer exists.', ephemeral: true });
-    }
-    const balance = storage.getPlayerPoints(interaction.user.id, mode).totalPoints;
-    if (balance < item.cost) {
-      return interaction.reply({ content: `❌ Not enough points! You have **${balance} pts**, this item costs **${item.cost} pts**.`, ephemeral: true });
-    }
-    if (item.type === 'role') {
-      const role = interaction.guild.roles.cache.get(item.roleId);
-      if (!role) {
-        return interaction.reply({ content: '❌ The role for this item no longer exists. Ask a supervisor.', ephemeral: true });
-      }
-      storage.adjustPoints(interaction.user.id, -item.cost, mode);
-      const granted = await interaction.member.roles.add(role).then(() => true).catch(() => false);
-      if (!granted) {
-        storage.adjustPoints(interaction.user.id, item.cost, mode);
-        return interaction.reply({ content: '❌ Could not grant the role. Points refunded.', ephemeral: true });
-      }
-      storeModule.logPurchase({ id: `${Date.now()}_${interaction.user.id}`, userId: interaction.user.id, itemId: item.id, itemName: item.name, cost: item.cost, type: item.type, roleId: item.roleId, mode, claimed: true, at: Date.now() });
-      applyRankOneRole(interaction.guild, computeCombinedRanking()).catch(() => {});
-      return interaction.reply({ content: `✅ Purchased **${item.name}**! Spent **${item.cost} pts**. Role <@&${item.roleId}> granted.`, ephemeral: true });
-    }
-    storage.adjustPoints(interaction.user.id, -item.cost, mode);
-    storeModule.logPurchase({ id: `${Date.now()}_${interaction.user.id}`, userId: interaction.user.id, itemId: item.id, itemName: item.name, cost: item.cost, type: item.type, mode, claimed: false, at: Date.now() });
-    const staffChannel = interaction.guild.channels.cache.get(config.logsChannelId);
-    if (staffChannel) {
-      const staffMention = config.staffRoles.length ? config.staffRoles.map(id => `<@&${id}>`).join(' ') : '';
-      await staffChannel.send({
-        content: `🛒 **Diamond purchase requested!**\nBuyer: <@${interaction.user.id}>\nItem: **${item.name}** (${item.cost} pts, ${mode} mode)\nPlease deliver the reward.${staffMention ? `\n${staffMention}` : ''}`
-      }).catch(() => {});
-    }
-    return interaction.reply({ content: `✅ Purchase received for **${item.name}**: **${item.cost} pts** deducted (${mode}). Staff has been notified to deliver your diamonds 💎.`, ephemeral: true });
-  }
-
+  try {
   if (interaction.isModalSubmit() && interaction.customId.startsWith('roommodal_')) {
     const matchId = interaction.customId.replace('roommodal_', '');
     console.log(`[MODAL] submit received for match ${matchId}`);
@@ -1196,86 +1427,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
-  if (interaction.isModalSubmit() && interaction.customId.startsWith('mvpmodal_')) {
-    const matchId = interaction.customId.slice('mvpmodal_'.length);
-    const match = manager.getMatch(matchId);
-    if (!match) {
-      return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
-    }
-    if (match.status !== 'full') {
-      return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
-    }
-    const captains = [match.team1[0], match.team2[0]].filter(Boolean);
-    if (!captains.includes(interaction.user.id)) {
-      return interaction.reply({ content: '❌ Only the first player of each team can vote!', ephemeral: true });
-    }
-
-    const winnerId = (interaction.fields.getSelectMenuValues('mvpWinnerSelect') || [])[0];
-    const loserId = (interaction.fields.getSelectMenuValues('mvpLoserSelect') || [])[0];
-    if (!winnerId || !loserId) {
-      return interaction.reply({ content: '❌ Select both a winner and a loser.', ephemeral: true });
-    }
-    if (winnerId === loserId) {
-      return interaction.reply({ content: '❌ Winner and loser must be different players.', ephemeral: true });
-    }
-    const roster = new Set([...match.team1, ...match.team2]);
-    if (!roster.has(winnerId) || !roster.has(loserId)) {
-      return interaction.reply({ content: '❌ That player is not part of this match.', ephemeral: true });
-    }
-
-    const voterId = interaction.user.id;
-    const teamOf = id => match.team1.includes(id) ? 1 : 2;
-    const otherId = voterId === match.team1[0] ? match.team2[0] : match.team1[0];
-
-    const recordSide = (isWinner, player) => {
-      const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
-      const setKey = isWinner ? 'winnerVoteSet' : 'loserVoteSet';
-      if (match[setKey]) return { already: true };
-      match[votesKey][voterId] = { team: teamOf(player), player };
-      const other = otherId ? match[votesKey][otherId] : null;
-      if (other && other.team === teamOf(player) && other.player === player) {
-        if (isWinner) {
-          match.winnerTeam = match[votesKey][voterId].team;
-          match.mvpWinnerId = player;
-        } else {
-          match.loserTeam = match[votesKey][voterId].team;
-          match.mvpLoserId = player;
-        }
-        match[setKey] = true;
-        match.resultStatus = null;
-        return { agreed: true, player };
-      }
-      if (other) {
-        match[votesKey] = {};
-        match.resultStatus = `❌ ${isWinner ? 'Winner' : 'Loser'} votes didn't match! Please vote again.`;
-        return { mismatch: true };
-      }
-      return { waiting: true };
-    };
-
-    const w = recordSide(true, winnerId);
-    const l = recordSide(false, loserId);
-    manager.persistMatches();
-    await updateResultBox(interaction.guild, match);
-
-    let msg;
-    if (w.mismatch || l.mismatch) {
-      const failed = w.mismatch ? 'Winner' : 'Loser';
-      msg = `❌ ${failed} votes didn't match, please try again!`;
-      interaction.channel.send({ content: `❌ **${failed} votes didn't match, please vote again!** (captains <@${match.team1[0]}> & <@${match.team2[0]}>)` }).catch(() => {});
-    } else if (w.agreed && l.agreed) {
-      msg = `✅ Both captains agree! 🏆 Winner: <@${winnerId}> • 💪 Loser: <@${loserId}>`;
-    } else {
-      const otherName = otherId ? await getPlayerName(interaction.guild, otherId) : 'the other captain';
-      msg = `✅ Vote saved! Waiting for **${otherName}** to vote.`;
-    }
-    await interaction.reply({ content: msg, ephemeral: true });
-    if (match.winnerVoteSet && match.loserVoteSet) {
-      await settleMatchResult(interaction.guild, match);
-    }
-    return;
-  }
-
   if (interaction.isModalSubmit() && interaction.customId.startsWith('joinkey_')) {
     const team = parseInt(interaction.customId.slice(interaction.customId.lastIndexOf('_') + 1));
     const matchId = interaction.customId.slice('joinkey_'.length, interaction.customId.lastIndexOf('_'));
@@ -1295,8 +1446,119 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isStringSelectMenu()) {
-    // Legacy MVP selects here are replaced by the 🗳️ Vote MVP modal.
-    return interaction.reply({ content: '⚠️ The MVP vote now uses the 🗳️ Vote MVP button above.', ephemeral: true });
+    const cid = interaction.customId;
+    let kind = null;
+    let matchId = null;
+
+    if (cid.startsWith('mvptype_')) {
+      kind = 'type';
+      matchId = cid.slice('mvptype_'.length);
+    } else if (cid.startsWith('mvvp_')) {
+      kind = 'winner';
+      matchId = cid.slice('mvvp_'.length);
+    } else if (cid.startsWith('mvlp_')) {
+      kind = 'loser';
+      matchId = cid.slice('mvlp_'.length);
+    }
+    if (!kind || !matchId) {
+      return interaction.reply({ content: '⚠️ Unknown selection.', ephemeral: true });
+    }
+
+    const match = manager.getMatch(matchId);
+    if (!match) {
+      return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+    }
+    if (match.status !== 'full') {
+      return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
+    }
+
+    const voterId = interaction.user.id;
+    const captains = [match.team1[0], match.team2[0]].filter(Boolean);
+    if (!captains.includes(voterId)) {
+      return interaction.reply({ content: '❌ Only the **first player of each team** can vote!', ephemeral: true });
+    }
+    const otherId = voterId === match.team1[0] ? match.team2[0] : match.team1[0];
+
+    if (kind === 'type') {
+      const isWinner = interaction.values[0] === 'winner';
+      const setKey = isWinner ? 'winnerVoteSet' : 'loserVoteSet';
+      const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
+      if (match[setKey]) {
+        return interaction.reply({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already finalized.`, ephemeral: true });
+      }
+      if (match[votesKey][voterId]) {
+        return interaction.reply({ content: '✅ You already voted! Use ❌ Cancel My Vote to change it.', ephemeral: true });
+      }
+      const opts = mvpPlayerOptions(interaction.guild, match);
+      if (opts.length === 0) {
+        return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
+      }
+      const embed = new EmbedBuilder()
+        .setTitle(isWinner ? '🏆 Select Winner MVP' : '💪 Select Loser MVP')
+        .setColor(isWinner ? 0xFFD700 : 0xFF8C00)
+        .setDescription('Pick a player from the list below (shows the first 2 players of each team in registration order).');
+      const row = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`${isWinner ? 'mvvp' : 'mvlp'}_${match.id}`)
+          .setPlaceholder('Select Players')
+          .setMinValues(1)
+          .setMaxValues(1)
+          .addOptions(opts)
+      );
+      return interaction.update({ embeds: [embed], components: [row] });
+    }
+
+    const isWinner = kind === 'winner';
+    const selected = interaction.values[0];
+    if (!(match.team1 || []).includes(selected) && !(match.team2 || []).includes(selected)) {
+      return interaction.reply({ content: '❌ That player is not part of this match.', ephemeral: true });
+    }
+
+    const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
+    const setKey = isWinner ? 'winnerVoteSet' : 'loserVoteSet';
+    if (match[setKey]) {
+      return interaction.reply({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already finalized.`, ephemeral: true });
+    }
+    if (match[votesKey][voterId]) {
+      return interaction.reply({ content: '✅ You already voted! Use ❌ Cancel My Vote to change it.', ephemeral: true });
+    }
+
+    const teamOf = id => match.team1.includes(id) ? 1 : 2;
+    match[votesKey][voterId] = { team: teamOf(selected), player: selected };
+    manager.persistMatches();
+
+    const other = otherId ? match[votesKey][otherId] : null;
+    let msg;
+    if (other && other.team === teamOf(selected) && other.player === selected) {
+      if (isWinner) {
+        match.winnerTeam = match[votesKey][voterId].team;
+        match.mvpWinnerId = selected;
+      } else {
+        match.loserTeam = match[votesKey][voterId].team;
+        match.mvpLoserId = selected;
+      }
+      match[setKey] = true;
+      match.resultStatus = null;
+      manager.persistMatches();
+      await updateResultBox(interaction.guild, match);
+      msg = `✅ Both captains agree! ${isWinner ? '🏆 Winner MVP' : '💪 Loser MVP'}: <@${selected}>`;
+      if (match.winnerVoteSet && match.loserVoteSet) {
+        await interaction.update({ embeds: [], components: [], content: msg });
+        await settleMatchResult(interaction.guild, match);
+        return;
+      }
+    } else if (other) {
+      match[votesKey] = {};
+      match.resultStatus = `❌ ${isWinner ? 'Winner' : 'Loser'} votes didn't match! Please vote again.`;
+      manager.persistMatches();
+      await updateResultBox(interaction.guild, match);
+      msg = `❌ Votes aren't the same, please try again!`;
+      interaction.channel.send({ content: `❌ **${isWinner ? 'Winner' : 'Loser'} votes didn't match, please vote again!** (captains <@${match.team1[0]}> & <@${match.team2[0]}>)` }).catch(() => {});
+    } else {
+      const otherName = otherId ? await getPlayerName(interaction.guild, otherId) : 'the other captain';
+      msg = `✅ Vote saved! Waiting for **${otherName}** to vote.`;
+    }
+    return interaction.update({ embeds: [], components: [], content: msg });
   }
 
   if (interaction.isButton()) {
@@ -1304,6 +1566,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (separator === -1) return interaction.reply({ content: '⚠️ Invalid interaction.', ephemeral: true });
     const action = interaction.customId.slice(0, separator);
     const matchId = interaction.customId.slice(separator + 1);
+
+    if (action === 'buyitem') {
+      return handleBuy(interaction, matchId);
+    }
+
     const match = manager.getMatch(matchId);
     if (!match) {
       console.log(`[BTN] match not found for action=${action} matchId=${matchId}`);
@@ -1406,7 +1673,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (roster.length === 0) {
         return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
       }
-      return interaction.showModal(buildMvpModal(interaction.guild, match));
+      const typeRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`mvptype_${match.id}`)
+          .setPlaceholder('Select the vote type')
+          .setMinValues(1)
+          .setMaxValues(1)
+          .addOptions(
+            new StringSelectMenuOptionBuilder().setLabel('🏆 Winner MVP').setValue('winner'),
+            new StringSelectMenuOptionBuilder().setLabel('💪 Loser MVP').setValue('loser')
+          )
+      );
+      const embed = new EmbedBuilder()
+        .setTitle('🗳️ Vote for MVP')
+        .setColor(0xFFD700)
+        .setDescription('Select **Winner MVP** or **Loser MVP**, then choose the player. Only the first 2 players of each team are shown.');
+      return interaction.reply({ embeds: [embed], components: [typeRow], ephemeral: true });
     }
 
     if (action === 'votecancel') {
@@ -1467,13 +1749,53 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === 'cancel') {
+      if (match.status === 'full') {
+        if (interaction.channel && interaction.channel.id === match.channelId2) {
+          return openCancelVote(interaction.guild, match, interaction);
+        }
+        return interaction.reply({ content: '⚠️ Use the **❌ Cancel Match** button inside the match room to start a cancel vote.', ephemeral: true });
+      }
       if (match.creatorId !== interaction.user.id && !hasCommandAccess(interaction.member)) {
         return interaction.reply({ content: '❌ Only the match host can cancel the match!', ephemeral: true });
       }
-      const byHost = match.creatorId === interaction.user.id;
       await cancelMatch(interaction.guild, match, `❌ **Match cancelled by** <@${interaction.user.id}>`);
-      await interaction.reply({ content: byHost ? '❌ Match cancelled!' : '❌ Match cancelled by staff.', ephemeral: true });
+      await interaction.reply({ content: '❌ Match cancelled!', ephemeral: true });
       return;
+    }
+
+    if (action === 'cancelfvote') {
+      if (match.status !== 'full') {
+        return interaction.reply({ content: '❌ This match is not cancellable by vote right now.', ephemeral: true });
+      }
+      const team = manager.getPlayerTeam(match, interaction.user.id);
+      if (!team) {
+        return interaction.reply({ content: '❌ Only players in this match can vote to cancel!', ephemeral: true });
+      }
+      match.cancelVotes = match.cancelVotes || { 1: [], 2: [] };
+      if ((match.cancelVotes[team] || []).includes(interaction.user.id)) {
+        return interaction.reply({ content: '✅ You already voted to cancel!', ephemeral: true });
+      }
+      match.cancelVotes[team].push(interaction.user.id);
+      manager.persistMatches();
+
+      const roomChannel = interaction.guild.channels.cache.get(match.channelId2) || interaction.channel;
+      const ok = (match.cancelVotes[1] || []).length >= CANCEL_NEEDED && (match.cancelVotes[2] || []).length >= CANCEL_NEEDED;
+
+      if (match.cancelMsgId && roomChannel) {
+        const cmsg = await roomChannel.messages.fetch(match.cancelMsgId).catch(() => null);
+        if (cmsg) await cmsg.edit({
+          embeds: [buildCancelVoteEmbed(match)],
+          components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`cancelfvote_${match.id}`).setLabel('🗳️ Vote for Cancel').setStyle(ButtonStyle.Danger)
+          )]
+        }).catch(() => {});
+      }
+
+      if (ok) {
+        await cancelMatch(interaction.guild, match, `❌ **Match cancelled by player vote** (<@${interaction.user.id}>)`);
+        return interaction.reply({ content: '❌ **The cancel vote passed — match cancelled!**', ephemeral: true });
+      }
+      return interaction.reply({ content: `✅ Vote recorded! Team ${team} now has ${(match.cancelVotes[team] || []).length}/${CANCEL_NEEDED}. Need ${CANCEL_NEEDED} from **each** team to cancel.`, ephemeral: true });
     }
 
     if (action === 'staffcancel') {
@@ -1486,6 +1808,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({ content: '🚫 Match cancelled by staff!', ephemeral: true });
       return;
     }
+  }
+  } catch (e) {
+    errLog(`InteractionCreate error (${interaction.customId}):`, e);
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: '❌ Something went wrong. Please try again.' }).catch(() => {});
+      } else {
+        await interaction.reply({ content: '❌ Something went wrong. Please try again.', ephemeral: true }).catch(() => {});
+      }
+    } catch { /* ignore */ }
   }
 });
 
@@ -1536,6 +1868,7 @@ const adminCommands = {
 };
 
 client.on(Events.MessageCreate, async (message) => {
+  try {
   if (message.author.bot) return;
 
   const content = message.content.trim().toLowerCase();
@@ -1568,36 +1901,12 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (content === '&store') {
-    const items = storeModule.getItems();
-    const mode = getModeByChannel(message.channel.id);
-    if (items.length === 0) {
-      return message.reply('🛒 The store is empty. Supervisors can add items with `&storeadd`.');
+  if (content === '&store' || content === '&refreshstore') {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can refresh the store!');
     }
-    const balance = storage.getPlayerPoints(message.author.id, mode).totalPoints;
-    const embed = new EmbedBuilder()
-      .setTitle('🛒 FF STORE')
-      .setDescription(`Exchange your **${mode.toUpperCase()} points** for rewards!\n${config.emojis.game || ''} Your balance: **${balance} pts**\n\nSelect an item below to buy it. Role items are granted instantly, diamond items are delivered by staff.`)
-      .setColor(0xFFA500);
-    const fields = items.map(it => ({
-      name: `${it.type === 'role' ? '👑' : '💎'} ${it.name}`,
-      value: `Cost: **${it.cost} pts**\nID: \`${it.id}\`${it.type === 'role' && it.roleId ? ` -> <@&${it.roleId}>` : ''}`,
-      inline: false
-    }));
-    embed.addFields(fields);
-    const opts = items.slice(0, 25).map(it =>
-      new StringSelectMenuOptionBuilder()
-        .setLabel(it.name)
-        .setDescription(`${it.type === 'role' ? 'Role' : 'Diamonds'} - ${it.cost} pts`)
-        .setValue(it.id)
-    );
-    const row = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('store_menu')
-        .setPlaceholder('🛒 Choose an item to buy')
-        .addOptions(opts)
-    );
-    return message.reply({ embeds: [embed], components: [row] });
+    await syncStoreEmbed(message.guild);
+    return message.reply(`✅ Store updated in ${config.storeChannelId ? `<#${config.storeChannelId}>` : 'the **store** channel'}.`);
   }
 
   if (content.startsWith('&remove')) {
@@ -1626,10 +1935,11 @@ client.on(Events.MessageCreate, async (message) => {
     const args = message.content.slice('&storeadd'.length).trim().split('|').map(s => s.trim());
     const name = args[0];
     const cost = parseInt(args[1]);
-    const type = (args[2] || '').toLowerCase();
+    let type = (args[2] || '').toLowerCase();
     const roleInput = args[3];
-    if (!name || isNaN(cost) || cost <= 0 || !['role', 'diamond'].includes(type)) {
-      return message.reply('Usage: `&storeadd <name>|<cost>|<role|diamond>|<roleId (role only)>`\nExamples:\n`&storeadd VIP Role|200|role|<roleId>`\n`&storeadd 500 Diamonds|300|diamond`');
+    if (type === 'diamond') type = 'gems';
+    if (!name || isNaN(cost) || cost <= 0 || !['role', 'gems'].includes(type)) {
+      return message.reply('Usage: `&storeadd <name>|<cost>|<role|gems>|<roleId (role only)>`\nExamples:\n`&storeadd VIP Role|200|role|<roleId>`\n`&storeadd 500 Gems|300|gems`');
     }
     let roleId = null;
     if (type === 'role') {
@@ -1638,7 +1948,8 @@ client.on(Events.MessageCreate, async (message) => {
       roleId = role.id;
     }
     const item = storeModule.addItem({ name, cost, type, roleId });
-    return message.reply(`✅ Store item added: **${item.name}** (${item.cost} pts, ${item.type}${item.roleId ? ` - <@&${item.roleId}>` : ''}). ID: \`${item.id}\``);
+    await syncStoreEmbed(message.guild);
+    return message.reply(`✅ Store item added: **${item.name}** (${item.cost} pts, ${item.type}${item.roleId ? ` - <@&${item.roleId}>` : ''}). ID: \`${item.id}\`. The store was updated.`);
   }
 
   if (content.startsWith('&storeremove')) {
@@ -1648,7 +1959,8 @@ client.on(Events.MessageCreate, async (message) => {
     const id = content.replace('&storeremove', '').trim();
     if (!id) return message.reply('Usage: `&storeremove <itemId>`');
     const ok = storeModule.removeItem(id);
-    return message.reply(ok ? `🚮 Store item \`${id}\` removed.` : '❌ Item not found.');
+    if (ok) await syncStoreEmbed(message.guild);
+    return message.reply(ok ? `🚮 Store item \`${id}\` removed. The store was updated.` : '❌ Item not found.');
   }
 
   if (content === '&commands') {
@@ -1951,9 +2263,13 @@ client.on(Events.MessageCreate, async (message) => {
       await message.channel.send({ content: `⏳ Waiting for the ${pending} vote before finishing the match.`, }).catch(() => {});
     }
   }
+  } catch (e) {
+    errLog(`MessageCreate error (${message.content}):`, e);
+  }
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
+  try {
   if (member.user.bot) return;
   const guild = member.guild;
   const cachedMap = client.invitesCache.get(guild.id);
@@ -1978,6 +2294,9 @@ client.on(Events.GuildMemberAdd, async (member) => {
   if (inviter) {
     inviter.send(`🎉 **New member via your invite!**\n<@${member.id}> joined your server using your invite link. You earned **${points} points**!`).catch(() => {});
   }
+  } catch (e) {
+    errLog('GuildMemberAdd error:', e);
+  }
 });
 
 client.on(Events.InviteCreate, (invite) => {
@@ -1993,6 +2312,7 @@ client.on(Events.InviteDelete, (invite) => {
 });
 
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  try {
   const member = oldState.member || newState.member;
   if (!member || member.user.bot) return;
   if (manager.isSuppressed(member.id)) return;
@@ -2033,6 +2353,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     blacklistModule.blacklistUser(member.id, 30 * 60 * 1000, 'Abandoned the match voice 3 times', client.user.id);
     await member.send('⛔ **You have been blacklisted for 30 minutes** for abandoning the match voice 3 times.').catch(() => {});
     if (room) room.send(`⛔ <@${member.id}> has been **blacklisted for 30 minutes** for abandoning the match voice 3 times.`).catch(() => {});
+  }
+  } catch (e) {
+    errLog('VoiceStateUpdate error:', e);
   }
 });
 

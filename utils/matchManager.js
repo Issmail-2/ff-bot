@@ -78,6 +78,15 @@ function validateMatch(match) {
   match.originalChannels = (match.originalChannels && typeof match.originalChannels === 'object') ? match.originalChannels : {};
   match.winnerVotes = (match.winnerVotes && typeof match.winnerVotes === 'object') ? match.winnerVotes : {};
   match.loserVotes = (match.loserVotes && typeof match.loserVotes === 'object') ? match.loserVotes : {};
+  match.cancelVotes = (match.cancelVotes && typeof match.cancelVotes === 'object') ? match.cancelVotes : { 1: [], 2: [] };
+  if (!Array.isArray(match.cancelVotes[1])) match.cancelVotes[1] = [];
+  if (!Array.isArray(match.cancelVotes[2])) match.cancelVotes[2] = [];
+
+  const crossDup = match.team1.filter(id => match.team2.includes(id));
+  if (crossDup.length) {
+    match.team2 = match.team2.filter(id => !match.team1.includes(id));
+    issues.push('cross-team-duplicates-removed: ' + crossDup.join(','));
+  }
 
   const roster = new Set([...match.team1, ...match.team2]);
   for (const key of ['winnerVotes', 'loserVotes']) {
@@ -277,9 +286,13 @@ function joinTeam(matchId, userId, team) {
   return { success: true, team1: match.team1, team2: match.team2 };
 }
 
-function leaveMatch(matchId, userId) {
+function leaveMatch(matchId, userId, opts = {}) {
   const match = activeMatches.get(matchId);
   if (!match) return { success: false, error: 'Match not found' };
+
+  if (match.status === 'full' && !opts.force) {
+    return { success: false, error: '❌ The match has started! You can only leave by using **Cancel Match** or an admin action.' };
+  }
 
   const idx1 = match.team1.indexOf(userId);
   const idx2 = match.team2.indexOf(userId);
@@ -296,6 +309,13 @@ function leaveMatch(matchId, userId) {
   }
 
   return { success: false, error: 'You are not in this match!' };
+}
+
+function getPlayerTeam(match, userId) {
+  if (!match) return null;
+  if ((match.team1 || []).includes(userId)) return 1;
+  if ((match.team2 || []).includes(userId)) return 2;
+  return null;
 }
 
 function isTeamsFull(matchId) {
@@ -564,6 +584,7 @@ module.exports = {
   getMatchByCreator,
   joinTeam,
   leaveMatch,
+  getPlayerTeam,
   isTeamsFull,
   createVoiceChannels,
   createChannel,
