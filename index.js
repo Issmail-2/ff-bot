@@ -503,8 +503,8 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
     .setColor(0xFF6600)
     .setDescription(`Match started by <@${match.creatorId}>`)
     .addFields(
-      { name: `${config.emojis.team1} Team 1 (${progress1})`, value: t1, inline: true },
-      { name: `${config.emojis.team2} Team 2 (${progress2})`, value: t2, inline: true }
+      { name: `${config.emojis.team1} Team 1 (${progress1})`, value: t1 },
+      { name: `${config.emojis.team2} Team 2 (${progress2})`, value: t2 }
     )
     .setFooter({ text: 'Use the buttons below to join or leave a team.' });
 
