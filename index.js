@@ -539,13 +539,33 @@ async function updateMatchChannel(guild, match) {
   }
 }
 
+async function cancelMatch(guild, match, cancelText) {
+  await manager.deleteVoiceChannels(guild, match).catch(() => {});
+  await manager.deleteChannel(guild, match).catch(() => {});
+  if (match.joinTimeout) { clearTimeout(match.joinTimeout); match.joinTimeout = null; }
+  if (match.configTimeout) { clearTimeout(match.configTimeout); match.configTimeout = null; }
+  const baseChannel = guild.channels.cache.get(match.channelId);
+  if (baseChannel && match.message) {
+    const msg = await baseChannel.messages.fetch(match.message).catch(() => null);
+    if (msg) await msg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
+  }
+  const roomChannel = guild.channels.cache.get(match.channelId2);
+  if (roomChannel && match.resultMessageId && match.resultMessageId !== match.message) {
+    const rmsg = await roomChannel.messages.fetch(match.resultMessageId).catch(() => null);
+    if (rmsg) await rmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
+  }
+  manager.removeMatch(match.id);
+}
+
 function buildResultButtons(match) {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`staffreq_${match.id}`).setLabel('🛡️ Staff Request').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`votecancel_${match.id}`).setLabel('❌ Cancel My Vote').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId(`mvpvote_${match.id}`).setLabel('🗳️ Vote for MVP').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`cancel_${match.id}`).setLabel('❌ Cancel Match').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`staffcancel_${match.id}`).setLabel('🚫 Staff Cancel').setStyle(ButtonStyle.Danger)
   );
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`mvpvote_${match.id}`).setLabel('🗳️ Vote MVP').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId(`votecancel_${match.id}`).setLabel('❌ Cancel My Vote').setStyle(ButtonStyle.Danger)
   );
   return [row1, row2];
 }
@@ -599,17 +619,25 @@ function buildMainMatchEmbed(match) {
   if (votes.length) status = votes.join(' ');
   if (match.resultStatus) status = String(match.resultStatus);
 
-  const voiceLine = (match.voice1Id && match.voice2Id)
-    ? `\n\n**Voice channels:**\n🟢 Team 1: <#${match.voice1Id}>\n🔴 Team 2: <#${match.voice2Id}>`
-    : '';
+  const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ') || '*None configured*';
+  const roomName = match.roomName || match.roomId || '—';
 
   return new EmbedBuilder()
-    .setTitle(`${config.emojis.game} ${display} ${match.teamSize}v${match.teamSize} Match`)
+    .setTitle(`Match ${match.teamSize}v${match.teamSize} - ${display}`)
     .setColor(0xFFD700)
-    .setDescription(`Host: <@${match.creatorId}>\n\n**Room ID:** \`${match.roomId}\`\n**Password:** \`${match.password}\`\n**Match Key:** \`${match.key || '—'}\`${voiceLine}\n\n**Status:** ${status}`)
+    .setDescription(
+      `**Roles to mention:** ${roleMentions}\n\n` +
+      `## Tap\n` +
+      `1️⃣ 🛡️ Staff Request\n` +
+      `2️⃣ 🗳️ Vote for MVP\n` +
+      `3️⃣ ❌ Cancel Match\n` +
+      `4️⃣ 🚫 Staff Cancel Match\n`
+    )
     .addFields(
       { name: `${config.emojis.team1} Team 1 (${match.team1.length}/${match.teamSize})`, value: t1Field },
-      { name: `${config.emojis.team2} Team 2 (${match.team2.length}/${match.teamSize})`, value: t2Field }
+      { name: `${config.emojis.team2} Team 2 (${match.team2.length}/${match.teamSize})`, value: t2Field },
+      { name: 'Room Information', value: `**Room ID:** \`${match.roomId}\`\n**Room Name:** \`${roomName}\`\n**Room Password:** \`${match.password}\`` },
+      { name: 'Status', value: status }
     )
     .setFooter({ text: 'Awards: Winner MVP 80 | Winner 50 | Loser MVP 30 | Loser 10' });
 }
@@ -1125,6 +1153,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const roomId = interaction.fields.getTextInputValue('roomIdInput').trim();
     const password = interaction.fields.getTextInputValue('passwordInput').trim();
     const matchKey = interaction.fields.getTextInputValue('keyInput').trim();
+    const roomName = interaction.fields.getTextInputValue('roomNameInput').trim();
 
     if (![2, 3, 4].includes(match.teamSize)) {
       console.log('[MODAL] invalid team size on match', match.teamSize);
@@ -1134,8 +1163,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
+    match.roomName = roomName;
     match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} roomName=${roomName} creator auto-joined T1`);
 
     try {
       const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
@@ -1313,7 +1343,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row3 = new ActionRowBuilder().addComponents(keyInput);
 
-      roomModal.addComponents(row1, row2, row3);
+      const roomNameInput = new TextInputBuilder()
+        .setCustomId('roomNameInput')
+        .setLabel('Room Name (Optional)')
+        .setPlaceholder('Optional - e.g. FF Match Room')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false);
+
+      const row4 = new ActionRowBuilder().addComponents(roomNameInput);
+
+      roomModal.addComponents(row1, row2, row3, row4);
 
       if (match.configTimeout) clearTimeout(match.configTimeout);
       match.configTimeout = setTimeout(() => {
@@ -1428,28 +1467,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === 'cancel') {
-      if (match.creatorId !== interaction.user.id) {
+      if (match.creatorId !== interaction.user.id && !hasCommandAccess(interaction.member)) {
         return interaction.reply({ content: '❌ Only the match host can cancel the match!', ephemeral: true });
       }
+      const byHost = match.creatorId === interaction.user.id;
+      await cancelMatch(interaction.guild, match, `❌ **Match cancelled by** <@${interaction.user.id}>`);
+      await interaction.reply({ content: byHost ? '❌ Match cancelled!' : '❌ Match cancelled by staff.', ephemeral: true });
+      return;
+    }
 
-      await manager.deleteVoiceChannels(interaction.guild, match);
-      await manager.deleteChannel(interaction.guild, match);
-      if (match.joinTimeout) {
-        clearTimeout(match.joinTimeout);
-        match.joinTimeout = null;
+    if (action === 'staffcancel') {
+      const isStaff = interaction.member.permissions.has('Administrator') ||
+        [...(config.staffRoles || []), ...(config.adminRoles || [])].some(rid => interaction.member.roles.cache.has(rid));
+      if (!isStaff) {
+        return interaction.reply({ content: '❌ Only staff can cancel the match!', ephemeral: true });
       }
-      if (match.configTimeout) {
-        clearTimeout(match.configTimeout);
-        match.configTimeout = null;
-      }
-      manager.removeMatch(matchId);
-
-      const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
-      if (msg) {
-        await msg.edit({ content: `❌ **Match cancelled by** <@${match.creatorId}>`, embeds: [], components: [] });
-      }
-
-      await interaction.reply({ content: '❌ Match cancelled!', ephemeral: true });
+      await cancelMatch(interaction.guild, match, `🚫 **Match cancelled by staff** (<@${interaction.user.id}>)`);
+      await interaction.reply({ content: '🚫 Match cancelled by staff!', ephemeral: true });
+      return;
     }
   }
 });
@@ -1669,24 +1704,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!target) return message.reply('Usage: `!cancelgame @user`');
     const existing = manager.getAllMatches().find(m => m.creatorId === target.id && m.mode === mode);
     if (!existing) return message.reply('❌ No active match found for that user.');
-    await manager.deleteVoiceChannels(message.guild, existing);
-    await manager.deleteChannel(message.guild, existing);
-    if (existing.joinTimeout) {
-      clearTimeout(existing.joinTimeout);
-      existing.joinTimeout = null;
-    }
-    if (existing.configTimeout) {
-      clearTimeout(existing.configTimeout);
-      existing.configTimeout = null;
-    }
-    const matchChan = message.guild.channels.cache.get(existing.channelId);
-    if (matchChan && existing.message) {
-      const msg = await matchChan.messages.fetch(existing.message).catch(() => null);
-      if (msg) {
-        await msg.edit({ content: `❌ **Match cancelled by admin** (<@${message.author.id}>)`, embeds: [], components: [] }).catch(() => {});
-      }
-    }
-    manager.removeMatch(existing.id);
+    await cancelMatch(message.guild, existing, `❌ **Match cancelled by admin** (<@${message.author.id}>)`);
     await message.reply(`❌ **Match cancelled by admin!** <@${target.id}>'s match has been cancelled.`);
   } else if (content.startsWith('&blacklist')) {
     if (!hasCommandAccess(message.member)) {
@@ -1819,24 +1837,7 @@ client.on(Events.MessageCreate, async (message) => {
       refunded.push(`💪 <@${match.loserId}> (${LOSER_POINTS} pts refunded)`);
     }
 
-    await manager.deleteVoiceChannels(message.guild, match);
-    await manager.deleteChannel(message.guild, match);
-    if (match.joinTimeout) {
-      clearTimeout(match.joinTimeout);
-      match.joinTimeout = null;
-    }
-    if (match.configTimeout) {
-      clearTimeout(match.configTimeout);
-      match.configTimeout = null;
-    }
-    const endChannel = message.guild.channels.cache.get(match.channelId2);
-    if (endChannel && match.resultMessageId) {
-      const endMsg = await endChannel.messages.fetch(match.resultMessageId).catch(() => null);
-      if (endMsg) {
-        await endMsg.edit({ content: `🛑 **Match force-ended by staff** (<@${message.author.id}>)`, embeds: [], components: [] }).catch(() => {});
-      }
-    }
-    manager.removeMatch(match.id);
+    await cancelMatch(message.guild, match, `🛑 **Match force-ended by staff** (<@${message.author.id}>)`);
 
     await message.reply(
       `🛑 **Match force-ended.** No points were awarded.` +
