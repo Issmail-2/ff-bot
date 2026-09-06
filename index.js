@@ -271,7 +271,7 @@ const COMMANDS_INFO = `🎮 **HOW TO USE THE BOT - FREE FIRE MATCHES**
 The **#1 ranked player** automatically receives the Rank #1 role!
 
 🛒 **STORE** (in the **\`store\`** channel)
-The store is a dedicated channel with a fixed **STORE / Available Items** embed and **Buy** buttons. Role items are granted instantly (points deducted only after the role is granted), **gems** open a private ticket with staff (no auto deduction - staff handles payment/delivery).
+The store is a dedicated channel with a fixed **STORE / Available Items** embed and a single **🛒 Buy** button. Press it, pick an item from the dropdown, and the **price is deducted from your balance automatically**. Role items are granted instantly, diamonds notify staff to deliver to you.
 Supervisors add items: \`&storeadd <name>|<cost>|<role|gems>|<roleId (role only)>\`
 Remove items: \`&storeremove <itemId>\`
 Refresh: \`&refreshstore\`
@@ -304,7 +304,7 @@ Refresh: \`&refreshstore\`
 \`&unjail <userID>\` - release a jailed player
 
 ⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\`
-💠 Store: \`role\` items auto-grant the role, \`gems\` open a private ticket handled by staff.`;
+💠 Store: \`role\` items auto-grant the role instantly, \`gems\`/diamonds deduct points immediately and staff delivers them.`;
 
 function buildInfoEmbeds() {
   const MAX = 4000;
@@ -860,24 +860,18 @@ function buildStoreEmbed(items) {
   return new EmbedBuilder()
     .setTitle('🛒 STORE')
     .setColor(0xFFA500)
-    .setDescription(`**Available Items**\n\n${list}\n\nClick a **Buy** button below. Role items are granted instantly, gems open a private ticket handled by staff. Items with a **📦 Stock** counter are limited and sell out once the count reaches zero.`);
+    .setDescription(`**Available Items**\n\n${list}\n\nPress the **🛒 Buy** button below and choose an item. The price is **deducted from your balance automatically** when you buy. Items with a **📦 Stock** counter are limited and sell out once the count reaches zero.`);
 }
 
 function buildStoreButtons(items) {
-  const rows = [];
-  let row = null;
-  for (const it of items) {
-    if (!row || row.components.length >= 5) {
-      row = new ActionRowBuilder();
-      rows.push(row);
-    }
-    row.addComponents(new ButtonBuilder()
-      .setCustomId(`buyitem_${it.id}`)
-      .setLabel(`${storeModule.isSoldOut(it) ? 'SOLD OUT: ' : 'Buy: '}${it.name}`.slice(0, 80))
-      .setStyle(storeModule.isSoldOut(it) ? ButtonStyle.Secondary : (it.type === 'role' ? ButtonStyle.Success : ButtonStyle.Primary))
-      .setDisabled(storeModule.isSoldOut(it)));
-  }
-  return rows;
+  const noItems = !items || items.length === 0 || items.every(i => storeModule.isSoldOut(i));
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('store_buy_open')
+      .setLabel('🛒 Buy')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(noItems)
+  )];
 }
 
 async function syncStoreEmbed(guild) {
@@ -901,82 +895,6 @@ async function syncStoreEmbed(guild) {
   console.log(`[STORE] store embed synced in ${channel.id}`);
 }
 
-async function openPurchaseTicket(interaction, item) {
-  const guild = interaction.guild;
-  const existing = guild.channels.cache.find(c =>
-    c.type === ChannelType.GuildText && c.name && c.name.startsWith(`ticket-${interaction.user.id}-`)
-  );
-  if (existing) {
-    return interaction.reply({ content: `You already have an open ticket: <#${existing.id}>`, ephemeral: true });
-  }
-
-  let category = config.ticketCategoryId ? guild.channels.cache.get(config.ticketCategoryId) : null;
-  if (!category) {
-    category = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === 'tickets');
-  }
-  if (!category) {
-    try {
-      category = await guild.channels.create({
-        name: '🎫 Tickets',
-        type: ChannelType.GuildCategory,
-        permissionOverwrites: [{ id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] }]
-      });
-      config.ticketCategoryId = category.id;
-    } catch (e) {
-      console.log('[TICKET] category create failed:', e.message);
-      return interaction.reply({ content: '❌ Could not create the tickets category. Check bot permissions.', ephemeral: true });
-    }
-  }
-
-  const staffIds = [...(config.staffRoles || []), ...(config.adminRoles || [])].filter(Boolean);
-  const profile = await guild.members.fetch(interaction.user.id).catch(() => null);
-  const name = profile ? (profile.displayName || profile.user.username) : interaction.user.username;
-
-  const overwrites = [
-    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-    { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }
-  ];
-  if (guild.members.me) {
-    overwrites.push({
-      id: guild.members.me.id,
-      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels]
-    });
-  }
-  for (const rid of staffIds) {
-    overwrites.push({ id: rid, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels] });
-  }
-
-  let channel;
-  try {
-    channel = await guild.channels.create({
-      name: `ticket-${interaction.user.id}-${item.id}`.slice(0, 100),
-      type: ChannelType.GuildText,
-      parent: category.id,
-      permissionOverwrites: overwrites
-    });
-  } catch (e) {
-    console.log('[TICKET] channel create failed:', e.message);
-    return interaction.reply({ content: '❌ Could not open the ticket. Check bot permissions.', ephemeral: true });
-  }
-
-  const staffMention = staffIds.map(id => `<@&${id}>`).join(' ');
-  const embed = new EmbedBuilder()
-    .setTitle('🛒 Purchase Ticket — Gems')
-    .setColor(0x00AAFF)
-    .setDescription(
-      `<@${interaction.user.id}> (${name}) requested to buy:\n\n` +
-      `💎 **${item.name}**\n` +
-      `**Price:** ${item.cost} pts\n\n` +
-      `Staff: please handle payment and delivery here. **Points are NOT deducted automatically for gems.**`
-    );
-  await channel.send({ content: `${staffMention || ''}\n<@${interaction.user.id}>`, embeds: [embed] }).catch(() => {});
-  storeModule.logPurchase({
-    id: `${Date.now()}_${interaction.user.id}`, userId: interaction.user.id, itemId: item.id,
-    itemName: item.name, cost: item.cost, type: 'gems', mode: 'amo', claimed: false, at: Date.now(), ticketChannelId: channel.id
-  });
-  return interaction.reply({ content: `✅ Ticket opened for **${item.name}**: <#${channel.id}>`, ephemeral: true });
-}
-
 async function handleBuy(interaction, itemId) {
   const item = storeModule.getItems().find(i => i.id === String(itemId).trim());
   if (!item) {
@@ -985,44 +903,62 @@ async function handleBuy(interaction, itemId) {
   if (storeModule.isSoldOut(item)) {
     return interaction.reply({ content: '❌ This item is **SOLD OUT**!', ephemeral: true });
   }
-  if (item.type === 'gems' || item.type === 'diamond') {
-    const consumed = storeModule.consumeStock(item.id);
-    if (!consumed.ok) {
-      return interaction.reply({ content: consumed.reason === 'sold_out' ? '❌ This item is **SOLD OUT**!' : '❌ That item no longer exists.', ephemeral: true });
-    }
-    return openPurchaseTicket(interaction, item);
-  }
-  if (item.type !== 'role') {
+  if (item.type !== 'role' && item.type !== 'gems' && item.type !== 'diamond') {
     return interaction.reply({ content: '❌ Unknown item type.', ephemeral: true });
   }
-  const role = interaction.guild.roles.cache.get(item.roleId);
-  if (!role) {
-    return interaction.reply({ content: '❌ The role for this item no longer exists. Ask a supervisor. (No points deducted)', ephemeral: true });
-  }
+
   const member = interaction.member;
-  if (member.roles.cache.has(role.id)) {
-    return interaction.reply({ content: '❌ You already own this role! (No points deducted)', ephemeral: true });
+  if (item.type === 'role') {
+    const role = interaction.guild.roles.cache.get(item.roleId);
+    if (!role) {
+      return interaction.reply({ content: '❌ The role for this item no longer exists. Ask a supervisor. (No points deducted)', ephemeral: true });
+    }
+    if (member.roles.cache.has(role.id)) {
+      return interaction.reply({ content: '❌ You already own this role! (No points deducted)', ephemeral: true });
+    }
   }
+
   const balance = storage.getPlayerPoints(member.id, 'amo').totalPoints;
   if (balance < item.cost) {
     return interaction.reply({ content: `❌ Not enough points! You have **${balance} pts**, this item costs **${item.cost} pts**.`, ephemeral: true });
   }
+
   const consumed = storeModule.consumeStock(item.id);
   if (!consumed.ok) {
     return interaction.reply({ content: consumed.reason === 'sold_out' ? '❌ This item was just **SOLD OUT**!' : '❌ That item no longer exists.', ephemeral: true });
   }
-  const granted = await member.roles.add(role).then(() => true).catch(() => false);
-  if (!granted) {
-    return interaction.reply({ content: '❌ Could not grant the role. **No points were deducted.** Ask a supervisor.', ephemeral: true });
+
+  if (item.type === 'role') {
+    const granted = await member.roles.add(item.roleId).then(() => true).catch(() => false);
+    if (!granted) {
+      return interaction.reply({ content: '❌ Could not grant the role. **No points were deducted.** Ask a supervisor.', ephemeral: true });
+    }
   }
+
   storage.adjustPoints(member.id, -item.cost, 'amo');
   storeModule.logPurchase({
     id: `${Date.now()}_${interaction.user.id}`, userId: interaction.user.id, itemId: item.id,
-    itemName: item.name, cost: item.cost, type: 'role', roleId: item.roleId, mode: 'amo', claimed: true, at: Date.now()
+    itemName: item.name, cost: item.cost, type: item.type, roleId: item.type === 'role' ? item.roleId : null,
+    mode: 'amo', claimed: true, at: Date.now()
   });
-  applyRankOneRole(interaction.guild, computeCombinedRanking()).catch(() => {});
+
+  if (item.type === 'role') {
+    applyRankOneRole(interaction.guild, computeCombinedRanking()).catch(() => {});
+  } else {
+    const logsChannel = interaction.guild.channels.cache.get(config.logsChannelId);
+    const staffMention = config.staffRoles.length ? config.staffRoles.map(id => `<@&${id}>`).join(' ') : '';
+    if (logsChannel) {
+      await logsChannel.send({
+        content: `💎 **Diamond/Gems purchase!**\nBuyer: <@${member.id}>\nItem: **${item.name}** (${item.cost} pts deducted)\nStaff, please deliver the diamonds.${staffMention ? `\n${staffMention}` : ''}`
+      }).catch(() => {});
+    } else {
+      await interaction.channel.send({ content: `💎 <@${member.id}> bought **${item.name}** (${item.cost} pts deducted). ${staffMention || 'Staff'}, please deliver the diamonds.` }).catch(() => {});
+    }
+  }
+
   if (syncStoreEmbed) syncStoreEmbed(interaction.guild).catch(() => {});
-  return interaction.reply({ content: `✅ Purchased **${item.name}**! Spent **${item.cost} pts**. Role <@&${item.roleId}> granted.`, ephemeral: true });
+  const suffix = item.type === 'role' ? `Role <@&${item.roleId}> granted.` : `Staff has been notified to deliver your diamonds 💎.`;
+  return interaction.reply({ content: `✅ Purchased **${item.name}**! Spent **${item.cost} pts** from your balance. ${suffix}`, ephemeral: true });
 }
 
 client.invitesCache = new Map();
@@ -1483,6 +1419,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isStringSelectMenu()) {
+    if (interaction.customId === 'store_menu') {
+      return handleBuy(interaction, interaction.values[0]);
+    }
     const cid = interaction.customId;
     let kind = null;
     let matchId = null;
@@ -1603,6 +1542,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (separator === -1) return interaction.reply({ content: '⚠️ Invalid interaction.', ephemeral: true });
     const action = interaction.customId.slice(0, separator);
     const matchId = interaction.customId.slice(separator + 1);
+
+    if (interaction.customId === 'store_buy_open') {
+      const items = storeModule.getItems().filter(it => !storeModule.isSoldOut(it));
+      if (items.length === 0) {
+        return interaction.reply({ content: '🛒 The store is empty or everything is SOLD OUT.', ephemeral: true });
+      }
+      const opts = items.slice(0, 25).map(it =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(it.name.slice(0, 100))
+          .setDescription(`${it.type === 'role' ? 'Role' : 'Gems'} - ${it.cost} pts${it.stock !== null && it.stock !== undefined ? ` (${it.stock} left)` : ''}`)
+          .setValue(it.id)
+      );
+      const row = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('store_menu')
+          .setPlaceholder('🛒 Choose an item to buy')
+          .setMinValues(1)
+          .setMaxValues(1)
+          .addOptions(opts)
+      );
+      return interaction.reply({ content: 'Choose an item:', components: [row], ephemeral: true });
+    }
 
     if (action === 'buyitem') {
       return handleBuy(interaction, matchId);
