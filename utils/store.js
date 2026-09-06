@@ -24,19 +24,36 @@ function getItems() {
   return loadStore().items;
 }
 
-function addItem({ name, cost, type, roleId }) {
+function addItem({ name, cost, type, roleId, stock }) {
   const data = loadStore();
   const item = {
     id: String(data.nextId),
     name,
     cost: parseInt(cost),
     type,
-    roleId: roleId || null
+    roleId: roleId || null,
+    stock: stock === null || stock === undefined ? null : parseInt(stock)
   };
   data.nextId += 1;
   data.items.push(item);
   saveStore(data);
   return item;
+}
+
+function isSoldOut(item) {
+  return item && item.stock !== null && item.stock !== undefined && item.stock <= 0;
+}
+
+function consumeStock(id) {
+  const data = loadStore();
+  const it = data.items.find(i => i.id === String(id).trim());
+  if (!it) return { ok: false, reason: 'not_found' };
+  if (isSoldOut(it)) return { ok: false, reason: 'sold_out' };
+  if (it.stock !== null && it.stock !== undefined) {
+    it.stock -= 1;
+    saveStore(data);
+  }
+  return { ok: true, item: it };
 }
 
 function removeItem(id) {
@@ -63,4 +80,4 @@ function logPurchase(entry) {
   savePurchases(list);
 }
 
-module.exports = { getItems, addItem, removeItem, loadPurchases, logPurchase };
+module.exports = { getItems, addItem, removeItem, isSoldOut, consumeStock, loadPurchases, logPurchase };

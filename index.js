@@ -281,6 +281,7 @@ Refresh: \`&refreshstore\`
 \`!play 2v2 | 3v3 | 4v4\` - host a match
 \`!esport 2v2 | 3v3 | 4v4\` - host an esport match
 \`!leaderboard\` - show the top players
+\`!balance\` (or \`!bal\`) - check your points (also \`!balance @user\`)
 
 🔧 **SUPERVISORS / ADMINS** (<@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310>)
 \`!setpoints @user points win/loss\` - adjust a player's points (also: <@&1450212500581646460> and <@1177600499298599035>)
@@ -853,12 +854,13 @@ function buildStoreEmbed(items) {
   const list = items.map((it, i) => {
     const icon = it.type === 'role' ? '👑' : '💎';
     const rolePart = it.type === 'role' && it.roleId ? ` → <@&${it.roleId}>` : '';
-    return `${i + 1}. ${icon} **${it.name}** — **${it.cost} pts**${rolePart}`;
+    const stockPart = it.stock !== null && it.stock !== undefined ? `\n📦 Stock: ${storeModule.isSoldOut(it) ? '**SOLD OUT**' : `**${it.stock}** left`}` : '';
+    return `${i + 1}. ${icon} **${it.name}** — **${it.cost} pts**${rolePart}${stockPart}`;
   }).join('\n') || '*No items yet. Supervisors can add items with `&storeadd`.*';
   return new EmbedBuilder()
     .setTitle('🛒 STORE')
     .setColor(0xFFA500)
-    .setDescription(`**Available Items**\n\n${list}\n\nClick a **Buy** button below. Role items are granted instantly, gems open a private ticket handled by staff.`);
+    .setDescription(`**Available Items**\n\n${list}\n\nClick a **Buy** button below. Role items are granted instantly, gems open a private ticket handled by staff. Items with a **📦 Stock** counter are limited and sell out once the count reaches zero.`);
 }
 
 function buildStoreButtons(items) {
@@ -871,8 +873,9 @@ function buildStoreButtons(items) {
     }
     row.addComponents(new ButtonBuilder()
       .setCustomId(`buyitem_${it.id}`)
-      .setLabel(`Buy: ${it.name}`.slice(0, 80))
-      .setStyle(it.type === 'role' ? ButtonStyle.Success : ButtonStyle.Primary));
+      .setLabel(`${storeModule.isSoldOut(it) ? 'SOLD OUT: ' : 'Buy: '}${it.name}`.slice(0, 80))
+      .setStyle(storeModule.isSoldOut(it) ? ButtonStyle.Secondary : (it.type === 'role' ? ButtonStyle.Success : ButtonStyle.Primary))
+      .setDisabled(storeModule.isSoldOut(it)));
   }
   return rows;
 }
@@ -979,7 +982,14 @@ async function handleBuy(interaction, itemId) {
   if (!item) {
     return interaction.reply({ content: '❌ That item no longer exists. Ask a supervisor to refresh the store.', ephemeral: true });
   }
+  if (storeModule.isSoldOut(item)) {
+    return interaction.reply({ content: '❌ This item is **SOLD OUT**!', ephemeral: true });
+  }
   if (item.type === 'gems' || item.type === 'diamond') {
+    const consumed = storeModule.consumeStock(item.id);
+    if (!consumed.ok) {
+      return interaction.reply({ content: consumed.reason === 'sold_out' ? '❌ This item is **SOLD OUT**!' : '❌ That item no longer exists.', ephemeral: true });
+    }
     return openPurchaseTicket(interaction, item);
   }
   if (item.type !== 'role') {
@@ -997,6 +1007,10 @@ async function handleBuy(interaction, itemId) {
   if (balance < item.cost) {
     return interaction.reply({ content: `❌ Not enough points! You have **${balance} pts**, this item costs **${item.cost} pts**.`, ephemeral: true });
   }
+  const consumed = storeModule.consumeStock(item.id);
+  if (!consumed.ok) {
+    return interaction.reply({ content: consumed.reason === 'sold_out' ? '❌ This item was just **SOLD OUT**!' : '❌ That item no longer exists.', ephemeral: true });
+  }
   const granted = await member.roles.add(role).then(() => true).catch(() => false);
   if (!granted) {
     return interaction.reply({ content: '❌ Could not grant the role. **No points were deducted.** Ask a supervisor.', ephemeral: true });
@@ -1007,6 +1021,7 @@ async function handleBuy(interaction, itemId) {
     itemName: item.name, cost: item.cost, type: 'role', roleId: item.roleId, mode: 'amo', claimed: true, at: Date.now()
   });
   applyRankOneRole(interaction.guild, computeCombinedRanking()).catch(() => {});
+  if (syncStoreEmbed) syncStoreEmbed(interaction.guild).catch(() => {});
   return interaction.reply({ content: `✅ Purchased **${item.name}**! Spent **${item.cost} pts**. Role <@&${item.roleId}> granted.`, ephemeral: true });
 }
 
@@ -1959,9 +1974,14 @@ client.on(Events.MessageCreate, async (message) => {
     const cost = parseInt(args[1]);
     let type = (args[2] || '').toLowerCase();
     const roleInput = args[3];
+    const stockInput = args[4];
     if (type === 'diamond') type = 'gems';
+    const stock = stockInput === undefined || stockInput === '' ? null : parseInt(stockInput);
     if (!name || isNaN(cost) || cost <= 0 || !['role', 'gems'].includes(type)) {
-      return message.reply('Usage: `&storeadd <name>|<cost>|<role|gems>|<roleId (role only)>`\nExamples:\n`&storeadd VIP Role|200|role|<roleId>`\n`&storeadd 500 Gems|300|gems`');
+      return message.reply('Usage: `&storeadd <name>|<cost>|<role|gems>|<roleId (role only)>|<stock (optional)>`\nExamples:\n`&storeadd VIP Role|200|role|<roleId>`\n`&storeadd 500 Gems|300|gems`\n`&storeadd Limited Role|500|role|<roleId>|5` (5 total, sells out when 0)');
+    }
+    if (stock !== null && (isNaN(stock) || stock <= 0)) {
+      return message.reply('❌ Stock must be a positive number, or leave it empty for unlimited.');
     }
     let roleId = null;
     if (type === 'role') {
@@ -1969,9 +1989,9 @@ client.on(Events.MessageCreate, async (message) => {
       if (!role) return message.reply('❌ Role items need a valid role ID or mention.');
       roleId = role.id;
     }
-    const item = storeModule.addItem({ name, cost, type, roleId });
+    const item = storeModule.addItem({ name, cost, type, roleId, stock });
     await syncStoreEmbed(message.guild);
-    return message.reply(`✅ Store item added: **${item.name}** (${item.cost} pts, ${item.type}${item.roleId ? ` - <@&${item.roleId}>` : ''}). ID: \`${item.id}\`. The store was updated.`);
+    return message.reply(`✅ Store item added: **${item.name}** (${item.cost} pts, ${item.type}${item.roleId ? ` - <@&${item.roleId}>` : ''}${item.stock !== null ? `, **${item.stock}** in stock` : ''}). ID: \`${item.id}\`. The store was updated.`);
   }
 
   if (content.startsWith('&storeremove')) {
@@ -2018,7 +2038,32 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (content === '!leaderboard') {
+  if (content === '!balance' || content === '!bal') {
+    let targetId = message.author.id;
+    const rest = message.content.replace(/!balance|!bal/i, '').trim();
+    const mention = message.mentions.users.first();
+    if (rest) {
+      const m = rest.match(/\d{15,20}/);
+      if (mention) targetId = mention.id;
+      else if (m) targetId = m[0];
+    }
+    const amo = storage.getPlayerPoints(targetId, 'amo');
+    const esp = storage.getPlayerPoints(targetId, 'esport');
+    const member = message.guild.members.cache.get(targetId);
+    const label = targetId === message.author.id ? '**Your**' : `**${member ? member.displayName : targetId}**'s`;
+    const embed = new EmbedBuilder()
+      .setTitle(`💰 ${label} Balance`)
+      .setColor(0x57F287)
+      .setDescription(
+        `🏆 ${getModeConfig('amo').displayName}: **${amo.totalPoints} pts** (${amo.wins}W / ${amo.losses}L)\n` +
+        `⚔️ ${getModeConfig('esport').displayName}: **${esp.totalPoints} pts** (${esp.wins}W / ${esp.losses}L)`
+      );
+    const affordable = storeModule.getItems().filter(it => !storeModule.isSoldOut(it) && amo.totalPoints >= it.cost);
+    if (affordable.length) {
+      embed.addFields({ name: '🛒 You can afford', value: affordable.slice(0, 10).map(it => `- **${it.name}** (${it.cost} pts)${it.stock !== null ? ` — ${it.stock} left` : ''}`).join('\n') });
+    }
+    return message.reply({ embeds: [embed] });
+  } else if (content === '!leaderboard') {
     await adminCommands.leaderboard(message, mode);
   } else if (content === '!resetpoints') {
     await adminCommands.resetpoints(message, mode);
