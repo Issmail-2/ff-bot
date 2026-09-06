@@ -1325,11 +1325,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setCustomId(`${isWinner ? 'mvwplayer' : 'mvlplayer'}_${match.id}`)
         .setPlaceholder(`Select the ${isWinner ? 'WINNER' : 'LOSER'} MVP`)
         .addOptions(opts);
+      const cancelVoteRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`votecancel_${match.id}`).setLabel('❌ Cancel Vote').setStyle(ButtonStyle.Danger)
+      );
       return interaction.reply({
         content: `${isWinner ? '🏆' : '💪'} Choose the ${isWinner ? 'winner' : 'loser'} MVP:`,
-        components: [new ActionRowBuilder().addComponents(playerSelect)],
+        components: [new ActionRowBuilder().addComponents(playerSelect), cancelVoteRow],
         ephemeral: true
       });
+    }
+
+    if (action === 'votecancel') {
+      return interaction.reply({ content: '✅ Vote cancelled.', ephemeral: true });
     }
 
     if (action === 'staffreq') {
