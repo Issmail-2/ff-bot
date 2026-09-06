@@ -78,6 +78,7 @@ function loadMatches() {
 function serializeMatch(m) {
   const copy = { ...m };
   delete copy.joinTimeout;
+  delete copy.configTimeout;
   return copy;
 }
 

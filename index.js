@@ -945,14 +945,18 @@ async function settleMatchResult(guild, match) {
   applyRankNicknames(guild).catch(() => {});
 }
 
-async function timeoutMatch(guild, matchId) {
+async function timeoutMatch(guild, matchId, phase = 'lobby') {
   const match = manager.getMatch(matchId);
   if (!match || match.status !== 'waiting') return;
   const channel = guild.channels.cache.get(match.channelId);
   if (channel) {
     const msg = await channel.messages.fetch(match.message).catch(() => null);
     if (msg) await msg.delete().catch(() => {});
-    await channel.send('⏰ **Match timed out!** The lobby didn\'t fill up within 2 minutes.').catch(() => {});
+    if (phase === 'config') {
+      await channel.send('⏰ **Room config timed out!** The host didn\'t set up the room within 30 seconds. Match cancelled.').catch(() => {});
+    } else {
+      await channel.send('⏰ **Match timed out!** The lobby didn\'t fill up within 2 minutes.').catch(() => {});
+    }
   }
   manager.removeMatch(matchId);
 }
@@ -1078,6 +1082,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       console.log('[MODAL] match box sent successfully, new msg id:', newMsg.id);
 
       await interaction.editReply({ content: `✅ Match created! You are on 🔴 Team 1.` }).catch(() => {});
+      if (match.configTimeout) {
+        clearTimeout(match.configTimeout);
+        match.configTimeout = null;
+      }
       if (match.joinTimeout) clearTimeout(match.joinTimeout);
       match.joinTimeout = setTimeout(() => {
         timeoutMatch(interaction.guild, match.id);
@@ -1237,6 +1245,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       roomModal.addComponents(row1, row2, row3);
 
+      if (match.configTimeout) clearTimeout(match.configTimeout);
+      match.configTimeout = setTimeout(() => {
+        timeoutMatch(interaction.guild, match.id, 'config');
+      }, 30 * 1000);
+
       return interaction.showModal(roomModal);
     }
 
@@ -1342,6 +1355,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (match.joinTimeout) {
         clearTimeout(match.joinTimeout);
         match.joinTimeout = null;
+      }
+      if (match.configTimeout) {
+        clearTimeout(match.configTimeout);
+        match.configTimeout = null;
       }
       manager.removeMatch(matchId);
 
