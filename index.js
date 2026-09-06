@@ -1552,16 +1552,17 @@ client.on(Events.MessageCreate, async (message) => {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can announce!');
     }
-    const parts = content.replace('&announce', '').trim().split(/\s+/);
-    const channelId = parts.shift();
-    if (!channelId || !/^\d+$/.test(channelId) || parts.length === 0) {
+    const raw = message.content.trim();
+    const parts = raw.split(/\s+/);
+    const channelId = parts[1];
+    if (!channelId || !/^\d+$/.test(channelId) || parts.length < 3) {
       return message.reply('Usage: `&announce <channelId> <message>`');
     }
     const target = message.guild.channels.cache.get(channelId);
     if (!target) {
       return message.reply(`❌ Channel <#${channelId}> not found in this server.`);
     }
-    const text = content.replace('&announce', '').trim().replace(channelId, '').trim();
+    const text = raw.replace(/^&announce\s+/i, '').replace(channelId, '').trim();
     const sent = await target.send(text).catch((e) => {
       message.reply(`❌ Could not send: ${e.message}`);
       return null;
