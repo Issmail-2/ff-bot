@@ -1901,7 +1901,15 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (content === '&store' || content === '&refreshstore') {
+  if (content === '&store') {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can refresh the store!');
+    }
+    await message.delete().catch(() => {});
+    await syncStoreEmbed(message.guild, message.channel);
+    return;
+  }
+  if (content === '&refreshstore') {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can refresh the store!');
     }
