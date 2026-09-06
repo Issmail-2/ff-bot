@@ -952,7 +952,7 @@ async function timeoutMatch(guild, matchId) {
   if (channel) {
     const msg = await channel.messages.fetch(match.message).catch(() => null);
     if (msg) await msg.delete().catch(() => {});
-    await channel.send('⏰ **Match timed out!** No one joined within 30 seconds.').catch(() => {});
+    await channel.send('⏰ **Match timed out!** The lobby didn\'t fill up within 2 minutes.').catch(() => {});
   }
   manager.removeMatch(matchId);
 }
@@ -1081,7 +1081,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (match.joinTimeout) clearTimeout(match.joinTimeout);
       match.joinTimeout = setTimeout(() => {
         timeoutMatch(interaction.guild, match.id);
-      }, 30000);
+      }, 2 * 60 * 1000);
     } catch (e) {
       console.error('Error creating match:', e);
       await interaction.editReply({ content: `❌ Error creating match: ${e.message}.` }).catch(() => {});
