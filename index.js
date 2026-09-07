@@ -2064,9 +2064,11 @@ client.on(Events.MessageCreate, async (message) => {
     if (args.length < 4) {
       return message.reply('Usage: `&blacklist <userId> <duration> <reason>`\nDurations: `30m`, `5h`, `7d`, `2w`, `perm`');
     }
-    const userId = args[1];
+    const rawId = args[1];
+    const m = rawId.match(/\d{15,20}/);
+    const userId = (message.mentions.users.first() && message.mentions.users.first().id) || (m ? m[0] : rawId);
     if (!/^\d{15,20}$/.test(userId)) {
-      return message.reply('❌ Invalid user ID.');
+      return message.reply('❌ Invalid user ID or mention.');
     }
     const durationMs = parseDuration(args[2]);
     if (durationMs === null) {
@@ -2084,8 +2086,14 @@ client.on(Events.MessageCreate, async (message) => {
     if (args.length < 2) {
       return message.reply('Usage: `&unblacklist <userId>`');
     }
-    const removed = blacklistModule.unblacklistUser(args[1]);
-    await message.reply(removed ? `✅ <@${args[1]}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
+    const rawId = args[1];
+    const m = rawId.match(/\d{15,20}/);
+    const userId = (message.mentions.users.first() && message.mentions.users.first().id) || (m ? m[0] : rawId);
+    if (!/^\d{15,20}$/.test(userId)) {
+      return message.reply('❌ Invalid user ID or mention. Usage: `&unblacklist <userId>`');
+    }
+    const removed = blacklistModule.unblacklistUser(userId);
+    await message.reply(removed ? `✅ <@${userId}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
   } else if (content.startsWith('&jail')) {
     if (!canUseJail(message.member)) {
       return message.reply('❌ Only admins can jail players!');
