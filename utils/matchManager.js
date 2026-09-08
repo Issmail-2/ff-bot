@@ -6,6 +6,10 @@ try { config = require('../config.json'); } catch { config = {}; }
 if (!config.modes) config.modes = {};
 if (!config.modes.amo) config.modes.amo = {};
 if (!config.modes.esport) config.modes.esport = {};
+if (process.env.AMO_VOICE_CATEGORY_ID) config.modes.amo.voiceCategoryId = process.env.AMO_VOICE_CATEGORY_ID;
+if (process.env.ESPORTS_VOICE_CATEGORY_ID) config.modes.esport.voiceCategoryId = process.env.ESPORTS_VOICE_CATEGORY_ID;
+if (!config.modes.amo.voiceCategoryId) config.modes.amo.voiceCategoryId = '1545316338145165332';
+if (!config.modes.esport.voiceCategoryId) config.modes.esport.voiceCategoryId = '1545386731686076476';
 if (process.env.ROOM_CATEGORY_ID) config.roomCategoryId = process.env.ROOM_CATEGORY_ID;
 if (!config.roomCategoryId) config.roomCategoryId = '1545316338145165332';
 
