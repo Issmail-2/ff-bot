@@ -696,8 +696,9 @@ function buildResultButtons(match) {
   return [row1, row2];
 }
 
-function mvpPlayerOptions(guild, match) {
-  const picks = [...(match.team1 || []).slice(0, 2), ...(match.team2 || []).slice(0, 2)];
+function mvpPlayerOptions(guild, match, excludeId) {
+  const picks = [...(match.team1 || []).slice(0, 2), ...(match.team2 || []).slice(0, 2)]
+    .filter(id => !excludeId || id !== excludeId);
   return picks.map(id => {
     const member = guild.members.cache.get(id);
     const name = member ? (member.displayName || member.user.username) : id;
@@ -1583,7 +1584,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (match[votesKey][voterId]) {
         return interaction.reply({ content: '✅ You already voted! Use ❌ Cancel My Vote to change it.', ephemeral: true });
       }
-      const opts = mvpPlayerOptions(interaction.guild, match);
+      const opts = mvpPlayerOptions(interaction.guild, match, isWinner ? match.mvpLoserId : match.mvpWinnerId);
       if (opts.length === 0) {
         return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
       }
@@ -1606,6 +1607,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const selected = interaction.values[0];
     if (!(match.team1 || []).includes(selected) && !(match.team2 || []).includes(selected)) {
       return interaction.reply({ content: '❌ That player is not part of this match.', ephemeral: true });
+    }
+    const otherMvp = isWinner ? match.mvpLoserId : match.mvpWinnerId;
+    if (otherMvp && otherMvp === selected) {
+      return interaction.reply({ content: `❌ <@${selected}> is already the other MVP — a player can't be both 🏆 Winner and 💪 Loser MVP!`, ephemeral: true });
     }
 
     const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
@@ -2360,6 +2365,9 @@ client.on(Events.MessageCreate, async (message) => {
         if (adminMatch.winnerTeam) {
           return message.reply('✅ Winner is already set. Use `!l @player` to set the loser.');
         }
+        if (adminMatch.loserId === target.id) {
+          return message.reply('❌ <@' + target.id + '> is already the Loser MVP — a player can\'t be both!');
+        }
         adminMatch.winnerTeam = team;
         adminMatch.mvpWinnerId = target.id;
         adminMatch.winnerId = target.id;
@@ -2367,6 +2375,9 @@ client.on(Events.MessageCreate, async (message) => {
       } else {
         if (adminMatch.loserTeam) {
           return message.reply('✅ Loser is already set. Use `!w @player` to set the winner.');
+        }
+        if (adminMatch.winnerId === target.id) {
+          return message.reply('❌ <@' + target.id + '> is already the Winner MVP — a player can\'t be both!');
         }
         adminMatch.loserTeam = team;
         adminMatch.mvpLoserId = target.id;
@@ -2397,6 +2408,11 @@ client.on(Events.MessageCreate, async (message) => {
     }
     const voteMode = doneMatch.mode || mode;
     console.log('[VOTE] found doneMatch', doneMatch.id, 'status', doneMatch.status, 'mode', doneMatch.mode);
+
+    const otherSet = isWin ? doneMatch.loserId : doneMatch.winnerId;
+    if (otherSet && otherSet === target.id) {
+      return message.reply(`❌ <@${target.id}> is already the ${isWin ? '💪 Loser' : '🏆 Winner'} MVP — a player can't be both!`);
+    }
 
     const points = isWin ? WINNER_POINTS : LOSER_POINTS;
     const result = storage.addPoints(target.id, points, isWin ? 'win' : 'loss', voteMode);
