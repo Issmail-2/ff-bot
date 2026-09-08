@@ -56,6 +56,7 @@ const manager = require('./utils/matchManager');
 const blacklistModule = require('./utils/blacklist');
 const jailModule = require('./utils/jail');
 const storeModule = require('./utils/store');
+const { COLORS, BRANDING, progressBar } = require('./utils/ui');
 
 const client = new Client({
   intents: [
@@ -320,9 +321,10 @@ function buildInfoEmbeds() {
   }
   if (cur) parts.push(cur);
   return parts.map((p, i) => new EmbedBuilder()
-    .setColor(0xFFA500)
+    .setColor(COLORS.info)
     .setTitle(i === 0 ? '🎮 HOW TO USE THE BOT - FREE FIRE MATCHES' : null)
-    .setDescription(p));
+    .setDescription(p)
+    .setFooter({ text: `${i + 1}/${parts.length} • ${BRANDING}` }));
 }
 
 async function sendCommandsInfo(channel) {
@@ -542,6 +544,8 @@ async function ensureEsportChannels(guild) {
 function buildMatchBoxEmbed(guild, match, creatorUser) {
   const progress1 = `${match.team1.length}/${match.teamSize}`;
   const progress2 = `${match.team2.length}/${match.teamSize}`;
+  const bar1 = progressBar(match.team1.length, match.teamSize, 8);
+  const bar2 = progressBar(match.team2.length, match.teamSize, 8);
 
   const t1 = match.team1.map(id => {
     const badge = storage.getRankBadge(id, match.mode || 'amo');
@@ -554,14 +558,14 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const display = getModeConfig(match.mode).displayName;
 
   const embed = new EmbedBuilder()
-    .setTitle(`${config.emojis.game} ${display} ${match.teamSize}v${match.teamSize} Match`)
-    .setColor(0xFF6600)
-    .setDescription(`Match started by <@${match.creatorId}>`)
+    .setTitle(`${config.emojis.game} ${display} • ${match.teamSize}v${match.teamSize}`)
+    .setColor(COLORS.primary)
+    .setDescription(`🎮 Created by <@${match.creatorId}> — join a team below to lock your spot.`)
     .addFields(
-      { name: `${config.emojis.team1} Team 1 (${progress1})`, value: t1 },
-      { name: `${config.emojis.team2} Team 2 (${progress2})`, value: t2 }
+      { name: `${config.emojis.team1} Team 1 \`${progress1}\``, value: `\`\`\`${bar1}\`\`\`\n${t1}`, inline: true },
+      { name: `${config.emojis.team2} Team 2 \`${progress2}\``, value: `\`\`\`${bar2}\`\`\`\n${t2}`, inline: true }
     )
-    .setFooter({ text: 'Use the buttons below to join or leave a team.' });
+    .setFooter({ text: BRANDING });
 
   return embed;
 }
@@ -578,13 +582,17 @@ async function updateMatchChannel(guild, match) {
     return badge ? `<@${id}> \`[${badge}]\`` : `<@${id}>`;
   }).join('\n') : 'Empty';
   const embed = new EmbedBuilder()
-    .setTitle(`🎮 ${match.teamSize}v${match.teamSize} Match Room`)
-    .setColor(0xFF6600)
-    .setDescription(`**🏠 Room ID:** \`${match.roomId}\`\n**🔑 Password:** \`${match.password}\`\n**🔐 Match Key:** \`${match.key || '—'}\``)
+    .setTitle(`${config.emojis.game} ${match.teamSize}v${match.teamSize} Match Room`)
+    .setColor(COLORS.primary)
+    .setDescription('Match details — share these with your teams.')
     .addFields(
-      { name: `🟢 Team 1 (${match.team1.length}/${match.teamSize})`, value: list1, inline: true },
-      { name: `🔴 Team 2 (${match.team2.length}/${match.teamSize})`, value: list2, inline: true }
-    );
+      { name: '🏠 Room ID', value: `\`${match.roomId}\``, inline: true },
+      { name: '🔑 Password', value: `\`${match.password || '—'}\``, inline: true },
+      { name: '🔐 Match Key', value: `\`${match.key || '—'}\``, inline: true },
+      { name: `${config.emojis.team1} Team 1 (${match.team1.length}/${match.teamSize})`, value: list1 || '*Empty*', inline: true },
+      { name: `${config.emojis.team2} Team 2 (${match.team2.length}/${match.teamSize})`, value: list2 || '*Empty*', inline: true }
+    )
+    .setFooter({ text: BRANDING });
   await channel.messages.fetch({ limit: 20 }).catch(() => {});
   const lastMsg = channel.lastMessage;
   if (lastMsg && lastMsg.author.id === client.user.id && lastMsg.embeds.length) {
@@ -622,24 +630,26 @@ const CANCEL_NEEDED = 2;
 
 function buildCancelVoteEmbed(match) {
   const cancelVotes = match.cancelVotes || { 1: [], 2: [] };
+  const votes1 = cancelVotes[1] || [];
+  const votes2 = cancelVotes[2] || [];
   const list = (team) => {
     const votes = cancelVotes[team] || [];
-    if (votes.length === 0) return '— (no votes yet)';
+    if (votes.length === 0) return '*No votes yet*';
     return votes.map(id => `<@${id}>`).join(' ');
   };
-  const t1Done = (cancelVotes[1] || []).length >= CANCEL_NEEDED;
-  const t2Done = (cancelVotes[2] || []).length >= CANCEL_NEEDED;
+  const t1Done = votes1.length >= CANCEL_NEEDED;
+  const t2Done = votes2.length >= CANCEL_NEEDED;
   const status = (t1Done && t2Done) ? '✅ **CANCEL APPROVED — the match will be cancelled now!**' : '⏳ Waiting for votes...';
   return new EmbedBuilder()
     .setTitle('❌ Cancel Match')
-    .setColor(0xE74C3C)
-    .setDescription(
-      `To cancel the match, **${CANCEL_NEEDED} players from EVERY team** must vote.\n` +
-      `Each player can vote **once**. The match keeps running until the vote passes.\n\n` +
-      `${config.emojis.team1} **Team 1** (${(cancelVotes[1] || []).length}/${CANCEL_NEEDED}):\n${list(1)}\n\n` +
-      `${config.emojis.team2} **Team 2** (${(cancelVotes[2] || []).length}/${CANCEL_NEEDED}):\n${list(2)}\n\n` +
-      `**Status:** ${status}`
-    );
+    .setColor(COLORS.danger)
+    .setDescription(`**${CANCEL_NEEDED} votes needed from every team.** Each player can vote once — the match keeps running until the vote passes.`)
+    .addFields(
+      { name: `${config.emojis.team1} Team 1 \`${votes1.length}/${CANCEL_NEEDED}\``, value: `\`\`\`${progressBar(votes1.length, CANCEL_NEEDED, 8)}\`\`\`\n${list(1)}`, inline: true },
+      { name: `${config.emojis.team2} Team 2 \`${votes2.length}/${CANCEL_NEEDED}\``, value: `\`\`\`${progressBar(votes2.length, CANCEL_NEEDED, 8)}\`\`\`\n${list(2)}`, inline: true },
+      { name: 'Status', value: status }
+    )
+    .setFooter({ text: BRANDING });
 }
 
 async function openCancelVote(guild, match, interaction) {
@@ -649,7 +659,7 @@ async function openCancelVote(guild, match, interaction) {
   }
   const embed = buildCancelVoteEmbed(match);
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`cancelfvote_${match.id}`).setLabel('🗳️ Vote for Cancel').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId(`cancelfvote_${match.id}`).setEmoji('🗳️').setLabel('Vote for Cancel').setStyle(ButtonStyle.Danger)
   );
   let msg = null;
   if (match.cancelMsgId) {
@@ -670,13 +680,13 @@ async function openCancelVote(guild, match, interaction) {
 
 function buildResultButtons(match) {
   const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`staffreq_${match.id}`).setLabel('🛡️ Staff Request').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`mvpvote_${match.id}`).setLabel('🗳️ Vote for MVP').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`cancel_${match.id}`).setLabel('❌ Cancel Match').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`staffcancel_${match.id}`).setLabel('🚫 Staff Cancel').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId(`staffreq_${match.id}`).setEmoji('🛡️').setLabel('Staff Request').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`mvpvote_${match.id}`).setEmoji('🗳️').setLabel('Vote for MVP').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`cancel_${match.id}`).setEmoji('❌').setLabel('Cancel Match').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`staffcancel_${match.id}`).setEmoji('🚫').setLabel('Staff Cancel').setStyle(ButtonStyle.Danger)
   );
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`votecancel_${match.id}`).setLabel('❌ Cancel My Vote').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId(`votecancel_${match.id}`).setEmoji('↩️').setLabel('Cancel My Vote').setStyle(ButtonStyle.Danger)
   );
   return [row1, row2];
 }
@@ -715,23 +725,16 @@ function buildMainMatchEmbed(match) {
   const roomName = match.roomName || match.roomId || '—';
 
   return new EmbedBuilder()
-    .setTitle(`Match ${match.teamSize}v${match.teamSize} - ${display}`)
-    .setColor(0xFFD700)
-    .setDescription(
-      `**Roles to mention:** ${roleMentions}\n\n` +
-      `## Tap\n` +
-      `1️⃣ 🛡️ Staff Request\n` +
-      `2️⃣ 🗳️ Vote for MVP\n` +
-      `3️⃣ ❌ Cancel Match\n` +
-      `4️⃣ 🚫 Staff Cancel Match\n`
-    )
+    .setTitle(`${config.emojis.game} ${display} • ${match.teamSize}v${match.teamSize}`)
+    .setColor(COLORS.gold)
+    .setDescription(`**Room ID:** \`${match.roomId}\` · **Room Name:** \`${roomName}\`\n**Room Password:** \`${match.password}\` — good luck!`)
     .addFields(
-      { name: `${config.emojis.team1} Team 1 (${match.team1.length}/${match.teamSize})`, value: t1Field },
-      { name: `${config.emojis.team2} Team 2 (${match.team2.length}/${match.teamSize})`, value: t2Field },
-      { name: 'Room Information', value: `**Room ID:** \`${match.roomId}\`\n**Room Name:** \`${roomName}\`\n**Room Password:** \`${match.password}\`` },
-      { name: 'Status', value: status }
+      { name: `${config.emojis.team1} Team 1 (${match.team1.length}/${match.teamSize})`, value: t1Field, inline: true },
+      { name: `${config.emojis.team2} Team 2 (${match.team2.length}/${match.teamSize})`, value: t2Field, inline: true },
+      { name: '📋 Actions', value: `🛡️ **Staff Request** — call staff to the room\n🗳️ **Vote for MVP** — captains pick the MVP\n❌ **Cancel Match** — opens a public cancel vote\n🚫 **Staff Cancel** — staff closes the match instantly` },
+      { name: '📊 Status', value: status || '—' }
     )
-    .setFooter({ text: 'Awards: Winner MVP 80 | Winner 50 | Loser MVP 30 | Loser 10' });
+    .setFooter({ text: `${roleMentions} • Awards: Winner MVP 80 | Winner 50 | Loser MVP 30 | Loser 10` });
 }
 
 async function updateResultBox(guild, match) {
@@ -761,9 +764,12 @@ async function startFullMatch(guild, match) {
     }
 
     const ts = Math.floor(Date.now() / 1000);
-    await apostado.send({
-      content: `${config.emojis.team1} **Match Ready!**\nMoving players to voice channels...\n<t:${ts}:f>`
-    }).catch(() => {});
+    const readyEmbed = new EmbedBuilder()
+      .setTitle(`${config.emojis.game} Match Ready!`)
+      .setColor(COLORS.success)
+      .setDescription(`**Teams are full** — moving players to the voice channels.\n<t:${ts}:f>`)
+      .setFooter({ text: BRANDING });
+    await apostado.send({ embeds: [readyEmbed] }).catch(() => {});
   }
 
   const roomChannelId = match.channelId2;
@@ -802,22 +808,26 @@ async function startFullMatch(guild, match) {
 function buildMatchButtons(match, userId) {
   const joinTeam1 = new ButtonBuilder()
     .setCustomId(`join1_${match.id}`)
-    .setLabel('🟢 Join Team 1')
+    .setEmoji('🟢')
+    .setLabel('Join Team 1')
     .setStyle(ButtonStyle.Success);
 
   const joinTeam2 = new ButtonBuilder()
     .setCustomId(`join2_${match.id}`)
-    .setLabel('🔴 Join Team 2')
-    .setStyle(ButtonStyle.Primary);
+    .setEmoji('🔴')
+    .setLabel('Join Team 2')
+    .setStyle(ButtonStyle.Danger);
 
   const leave = new ButtonBuilder()
     .setCustomId(`leave_${match.id}`)
-    .setLabel('🚪 Leave')
-    .setStyle(ButtonStyle.Danger);
+    .setEmoji('🚪')
+    .setLabel('Leave')
+    .setStyle(ButtonStyle.Secondary);
 
   const cancel = new ButtonBuilder()
     .setCustomId(`cancel_${match.id}`)
-    .setLabel('❌ Cancel Match')
+    .setEmoji('❌')
+    .setLabel('Cancel Match')
     .setStyle(ButtonStyle.Danger);
 
   const row1 = new ActionRowBuilder().addComponents(joinTeam1, joinTeam2, leave);
@@ -854,13 +864,14 @@ function buildStoreEmbed(items) {
   const list = items.map((it, i) => {
     const icon = it.type === 'role' ? '👑' : '💎';
     const rolePart = it.type === 'role' && it.roleId ? ` → <@&${it.roleId}>` : '';
-    const stockPart = it.stock !== null && it.stock !== undefined ? `\n📦 Stock: ${storeModule.isSoldOut(it) ? '**SOLD OUT**' : `**${it.stock}** left`}` : '';
-    return `${i + 1}. ${icon} **${it.name}** — **${it.cost} pts** (ID: \`${it.id}\`)${rolePart}${stockPart}`;
+    const stockPart = it.stock !== null && it.stock !== undefined ? ` • 📦 ${storeModule.isSoldOut(it) ? '**SOLD OUT**' : `**${it.stock}** left`}` : '';
+    return `${i + 1}. ${icon} **${it.name}** — **${it.cost} pts** \`${it.id}\`${rolePart}${stockPart}`;
   }).join('\n') || '*No items yet. Supervisors can add items with `&storeadd`.*';
   return new EmbedBuilder()
-    .setTitle('🛒 STORE')
-    .setColor(0xFFA500)
-    .setDescription(`**Available Items**\n\n${list}\n\nPress the **🛒 Buy** button below and choose an item. The price is **deducted from your balance automatically** when you buy. Items with a **📦 Stock** counter are limited and sell out once the count reaches zero.`);
+    .setTitle('🛒 FREE FIRE Store')
+    .setColor(COLORS.info)
+    .setDescription(`**Available items** — prices are **deducted from your balance automatically**.\nItems with a 📦 counter are limited and sell out at zero.\n\n${list}`)
+    .setFooter({ text: BRANDING });
 }
 
 function buildStoreButtons(items) {
@@ -868,7 +879,8 @@ function buildStoreButtons(items) {
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('store_buy_open')
-      .setLabel('🛒 Buy')
+      .setEmoji('🛒')
+      .setLabel('Buy')
       .setStyle(ButtonStyle.Success)
       .setDisabled(noItems)
   )];
@@ -1093,19 +1105,21 @@ client.on(Events.MessageCreate, async (message) => {
     const match = manager.createMatch(message.author.id, teamSize, message.channel.id, mode);
 
     const setupEmbed = new EmbedBuilder()
-      .setTitle(`🎮 ${modeCfg.displayName} Match Setup (${teamSize}v${teamSize})`)
-      .setDescription(`<@${message.author.id}>, click **Set Room Config** to enter your **${teamSize}v${teamSize}** match room details.`)
-      .setColor(0xFF6600)
-      .setFooter({ text: 'This message will be replaced once configured.' });
+      .setTitle(`${config.emojis.game} ${modeCfg.displayName} • ${teamSize}v${teamSize}`)
+      .setDescription(`<@${message.author.id}> created a **${modeCfg.displayName} ${teamSize}v${teamSize}** match!\nClick **Set Room Config** to enter your room details, then share the room with your team.`)
+      .setColor(COLORS.primary)
+      .setFooter({ text: BRANDING });
 
     const setupButton = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`setup_${match.id}`)
-        .setLabel('⚙️ Set Room Config')
+        .setEmoji('⚙️')
+        .setLabel('Set Room Config')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId(`cancel_${match.id}`)
-        .setLabel('❌ Cancel Match')
+        .setEmoji('❌')
+        .setLabel('Cancel')
         .setStyle(ButtonStyle.Danger)
     );
 
@@ -1224,14 +1238,15 @@ async function dumpMatchChat(guild, match) {
   const chatFile = { attachment: buffer, name: `match-${match.id.slice(-5)}-chat.txt` };
 
   const embed = new EmbedBuilder()
-    .setTitle(`📜 Match Log - ${match.teamSize}v${match.teamSize}`)
-    .setColor(0x00FF00)
+    .setTitle(`📜 Match Log • ${match.teamSize}v${match.teamSize}`)
+    .setColor(COLORS.green)
     .setDescription(
       `Match finished **<t:${Math.floor(ts / 1000)}:F>**\n` +
       `🏆 Winner Team: ${match.winnerTeam ? `Team ${match.winnerTeam}` : '—'} | MVP Winner: <@${match.mvpWinnerId || '—'}>\n` +
       `💪 Loser Team: ${match.loserTeam ? `Team ${match.loserTeam}` : '—'} | MVP Loser: <@${match.mvpLoserId || '—'}>\n` +
       `💬 Full chat log below ⬇️`
-    );
+    )
+    .setFooter({ text: BRANDING });
 
   await logChannel.send({ embeds: [embed], files: [chatFile] }).catch(e => console.log('[DUMP] send failed:', e.message));
 }
@@ -1277,7 +1292,7 @@ async function settleMatchResult(guild, match) {
     if (msg) {
       const resultEmbed = new EmbedBuilder()
         .setTitle('✅ Match Finished!')
-        .setColor(0x00FF00)
+        .setColor(COLORS.green)
         .setDescription(lines.join('\n'))
         .setFooter({ text: `Winner MVP <@${match.mvpWinnerId}> vs Loser MVP <@${match.mvpLoserId}>` });
       await msg.edit({ embeds: [resultEmbed], components: [] }).catch(() => {});
@@ -1478,8 +1493,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const embed = new EmbedBuilder()
         .setTitle(isWinner ? '🏆 Select Winner MVP' : '💪 Select Loser MVP')
-        .setColor(isWinner ? 0xFFD700 : 0xFF8C00)
-        .setDescription('Pick a player from the list below (shows the first 2 players of each team in registration order).');
+        .setColor(isWinner ? COLORS.gold : COLORS.loser)
+        .setDescription(`Pick a player from the match roster below (first **2 players of each team** in registration order).`);
       const row = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`${isWinner ? 'mvvp' : 'mvlp'}_${match.id}`)
@@ -1557,6 +1572,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const opts = items.slice(0, 25).map(it =>
         new StringSelectMenuOptionBuilder()
+          .setEmoji(it.type === 'role' ? '👑' : '💎')
           .setLabel(it.name.slice(0, 100))
           .setDescription(`${it.type === 'role' ? 'Role' : 'Gems'} - ${it.cost} pts${it.stock !== null && it.stock !== undefined ? ` (${it.stock} left)` : ''}`)
           .setValue(it.id)
@@ -1569,7 +1585,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setMaxValues(1)
           .addOptions(opts)
       );
-      return interaction.reply({ content: 'Choose an item:', components: [row], ephemeral: true });
+      const buyEmbed = new EmbedBuilder()
+        .setTitle('🛒 Buy an item')
+        .setColor(COLORS.info)
+        .setDescription('Select an item below — the price is **deducted from your balance automatically**.');
+      return interaction.reply({ embeds: [buyEmbed], components: [row], ephemeral: true });
     }
 
     if (action === 'buyitem') {
@@ -1690,9 +1710,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           )
       );
       const embed = new EmbedBuilder()
-        .setTitle('🗳️ Vote for MVP')
-        .setColor(0xFFD700)
-        .setDescription('Select **Winner MVP** or **Loser MVP**, then choose the player. Only the first 2 players of each team are shown.');
+        .setTitle('🗳️ MVP Voting')
+        .setColor(COLORS.gold)
+        .setDescription('Select **Winner MVP** or **Loser MVP**, then pick the player.\nOnly the **first 2 players of each team** are listed.');
       return interaction.reply({ embeds: [embed], components: [typeRow], ephemeral: true });
     }
 
@@ -1835,12 +1855,18 @@ const adminCommands = {
 
     const embed = new EmbedBuilder()
       .setTitle(`🏆 ${getModeConfig(mode).displayName} Leaderboard`)
-      .setColor(0xFFD700)
-      .setDescription(sorted.map(([id, data], i) => {
-        const rank = i + 1;
-        const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`;
-        return `${medal} <@${id}> - **${data.totalPoints} pts** (${data.wins}W/${data.losses}L)`;
-      }).join('\n'));
+      .setColor(COLORS.gold)
+      .setDescription(sorted.slice(0, 3).map(([id, data], i) => {
+        const medal = ['🥇', '🥈', '🥉'][i];
+        return `${medal} <@${id}> — **${data.totalPoints} pts** (${data.wins}W / ${data.losses}L)`;
+      }).join('\n'))
+      .setFooter({ text: `${sorted.length} player${sorted.length === 1 ? '' : 's'} ranked • ${BRANDING}` });
+
+    const rest = sorted.slice(3).map(([id, data], i) => {
+      return `**#${i + 4}** <@${id}> — ${data.totalPoints} pts (${data.wins}W / ${data.losses}L)`;
+    }).join('\n');
+
+    if (rest) embed.addFields({ name: '---', value: rest });
 
     await message.reply({ embeds: [embed] });
   },
@@ -2029,11 +2055,13 @@ client.on(Events.MessageCreate, async (message) => {
     const label = targetId === message.author.id ? '**Your**' : `**${member ? member.displayName : targetId}**'s`;
     const embed = new EmbedBuilder()
       .setTitle(`💰 ${label} Balance`)
-      .setColor(0x57F287)
-      .setDescription(
-        `🏆 ${getModeConfig('amo').displayName}: **${amo.totalPoints} pts** (${amo.wins}W / ${amo.losses}L)\n` +
-        `⚔️ ${getModeConfig('esport').displayName}: **${esp.totalPoints} pts** (${esp.wins}W / ${esp.losses}L)`
-      );
+      .setColor(COLORS.success)
+      .setDescription('Match points across both modes.')
+      .addFields(
+        { name: `🏆 ${getModeConfig('amo').displayName}`, value: `**${amo.totalPoints} pts**\n${amo.wins}W / ${amo.losses}L`, inline: true },
+        { name: `⚔️ ${getModeConfig('esport').displayName}`, value: `**${esp.totalPoints} pts**\n${esp.wins}W / ${esp.losses}L`, inline: true }
+      )
+      .setFooter({ text: BRANDING });
     const affordable = storeModule.getItems().filter(it => !storeModule.isSoldOut(it) && amo.totalPoints >= it.cost);
     if (affordable.length) {
       embed.addFields({ name: '🛒 You can afford', value: affordable.slice(0, 10).map(it => `- **${it.name}** (${it.cost} pts)${it.stock !== null ? ` — ${it.stock} left` : ''}`).join('\n') });
@@ -2271,7 +2299,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     const embed = new EmbedBuilder()
       .setTitle(isWin ? '🏆 MVP Winner!' : '💪 MVP Loser!')
-      .setColor(isWin ? 0xFFD700 : 0xFF6600)
+      .setColor(isWin ? COLORS.gold : COLORS.primary)
       .setDescription(`<@${target.id}> earned **${points} points**!`)
       .setFooter({ text: `Total: ${result.totalPoints} pts | ${result.wins}W/${result.losses}L` });
 
@@ -2283,14 +2311,14 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (doneMatch.winnerId && doneMatch.loserId) {
       const logEmbed = new EmbedBuilder()
-        .setTitle(`📜 Match Log - ${doneMatch.teamSize}v${doneMatch.teamSize}`)
-        .setColor(0x00FF00)
-        .setDescription(`**Match finished** — MVP votes submitted.`)
+        .setTitle(`📜 Match Log • ${doneMatch.teamSize}v${doneMatch.teamSize}`)
+        .setColor(COLORS.green)
+        .setDescription('**Match finished** — MVP votes submitted. Points awarded.')
         .addFields(
           { name: '🏆 Winner', value: `<@${doneMatch.winnerId}>`, inline: true },
           { name: '💪 Loser', value: `<@${doneMatch.loserId}>`, inline: true }
         )
-        .setFooter({ text: 'Players returned to their channels. Match cleaned up.' });
+        .setFooter({ text: BRANDING });
       await message.channel.send({ embeds: [logEmbed] }).catch(() => {});
 
       manager.logMatch({
