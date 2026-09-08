@@ -2345,6 +2345,9 @@ client.on(Events.MessageCreate, async (message) => {
     );
   } else if (content.startsWith('!w') || content.startsWith('!l')) {
     const isWin = content.startsWith('!w');
+    if (!canSetResult(message.member)) {
+      return message.reply('⚙️ **`!w` / `!l` is staff-only.**\nPlayers vote for the MVPs using the **🗳️ Vote MVP** buttons in the match room.');
+    }
     const target = message.mentions.users.first();
     if (!target) {
       return message.reply(`Usage: \`${isWin ? '!w' : '!l'} @player\``);
@@ -2393,74 +2396,6 @@ client.on(Events.MessageCreate, async (message) => {
         await message.channel.send({ content: `⏳ Waiting for the ${pending} before finishing the match.` }).catch(() => {});
       }
       return;
-    }
-
-    const doneMatch = manager.getAllMatches().find(m =>
-      m.creatorId === message.author.id &&
-      (m.status === 'full' || m.status === 'waiting')
-    );
-    if (!doneMatch) {
-      const available = manager.getAllMatches().map(mm => ({
-        id: mm.id, mode: mm.mode, status: mm.status, creator: mm.creatorId
-      }));
-      console.log('[VOTE] no matching doneMatch. available=', JSON.stringify(available));
-      return;
-    }
-    const voteMode = doneMatch.mode || mode;
-    console.log('[VOTE] found doneMatch', doneMatch.id, 'status', doneMatch.status, 'mode', doneMatch.mode);
-
-    const otherSet = isWin ? doneMatch.loserId : doneMatch.winnerId;
-    if (otherSet && otherSet === target.id) {
-      return message.reply(`❌ <@${target.id}> is already the ${isWin ? '💪 Loser' : '🏆 Winner'} MVP — a player can't be both!`);
-    }
-
-    const points = isWin ? WINNER_POINTS : LOSER_POINTS;
-    const result = storage.addPoints(target.id, points, isWin ? 'win' : 'loss', voteMode);
-
-    const embed = new EmbedBuilder()
-      .setTitle(isWin ? '🏆 MVP WINNER' : '💪 MVP LOSER')
-      .setColor(isWin ? COLORS.gold : COLORS.primary)
-      .setDescription(`\`\`\`${divider('═')}\`\`\`\n<@${target.id}> earned **${points} points**!`)
-      .setFooter({ text: `Total: ${result.totalPoints} pts | ${result.wins}W/${result.losses}L` });
-
-    await message.channel.send({ embeds: [embed] });
-
-    if (isWin) doneMatch.winnerId = target.id;
-    else doneMatch.loserId = target.id;
-    manager.persistMatches();
-
-    if (doneMatch.winnerId && doneMatch.loserId) {
-      const logEmbed = new EmbedBuilder()
-        .setTitle(`📜 Match Log • ${doneMatch.teamSize}v${doneMatch.teamSize}`)
-        .setColor(COLORS.green)
-        .setDescription('**Match finished** — MVP votes submitted. Points awarded.')
-        .addFields(
-          { name: '🏆 Winner', value: `<@${doneMatch.winnerId}>`, inline: true },
-          { name: '💪 Loser', value: `<@${doneMatch.loserId}>`, inline: true }
-        )
-        .setFooter({ text: BRANDING });
-      await message.channel.send({ embeds: [logEmbed] }).catch(() => {});
-
-      manager.logMatch({
-        id: doneMatch.id,
-        timestamp: Date.now(),
-        teamSize: doneMatch.teamSize,
-        roomId: doneMatch.roomId,
-        password: doneMatch.password,
-        team1: doneMatch.team1,
-        team2: doneMatch.team2,
-        winnerId: doneMatch.winnerId,
-        loserId: doneMatch.loserId
-      });
-
-      await dumpMatchChat(message.guild, doneMatch);
-
-      await manager.finishMatch(message.guild, doneMatch);
-      applyRankNicknames(message.guild).catch(() => {});
-      refreshCombinedLeaderboard(message.guild);
-    } else {
-      const pending = isWin ? '💪 **!l** loser' : '🏆 **!w** winner';
-      await message.channel.send({ content: `⏳ Waiting for the ${pending} vote before finishing the match.`, }).catch(() => {});
     }
   }
   } catch (e) {
