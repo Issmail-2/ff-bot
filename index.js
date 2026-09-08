@@ -838,7 +838,7 @@ function buildMatchButtons(match, userId) {
 
   const components = [row1];
 
-  if (match.creatorId === userId) {
+  if (match.status === 'waiting') {
     const cancelRow = new ActionRowBuilder().addComponents(cancel);
     components.push(cancelRow);
   }
