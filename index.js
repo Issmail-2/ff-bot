@@ -991,19 +991,27 @@ function refreshCombinedLeaderboard(guild) {
 
 const reportDrafts = new Map();
 const REPORT_PLATFORM_ICON = { PC: '🖥️', Android: '🤖', iOS: '🍎' };
+const DEFAULT_CHECKER_ROLE_IDS = ['1537301155955216394', '1537811347813695488', '1537224612763537418'];
+
+function getCheckerRoleIds() {
+  const S = settingsStore.loadSettings();
+  if (Array.isArray(S.checkerRoleIds) && S.checkerRoleIds.length) return S.checkerRoleIds.slice();
+  if (S.checkerRoleId) return [S.checkerRoleId];
+  if (process.env.CHECKER_ROLE_ID) return process.env.CHECKER_ROLE_ID.split(',').map(s => s.trim()).filter(Boolean);
+  return DEFAULT_CHECKER_ROLE_IDS.slice();
+}
 
 function getCheckerRoleId() {
-  const S = settingsStore.loadSettings();
-  return S.checkerRoleId || process.env.CHECKER_ROLE_ID || null;
+  const ids = getCheckerRoleIds();
+  return ids.length ? ids[0] : null;
 }
 
 function isChecker(member) {
   if (!member) return false;
   if (member.permissions.has('Administrator')) return true;
   if (hasCommandAccess(member)) return true;
-  const rid = getCheckerRoleId();
-  if (rid && member.roles.cache.has(rid)) return true;
-  return false;
+  const ids = getCheckerRoleIds();
+  return ids.some(rid => member.roles.cache.has(rid));
 }
 
 async function resolveReportPlayer(guild, text) {
@@ -1066,7 +1074,7 @@ async function ensureCheaterChannels(guild) {
     settingsStore.saveSettings(S);
   }
 
-  const checkerRoleId = getCheckerRoleId();
+  const checkerRoleIds = getCheckerRoleIds();
 
   let checkChannel = guild.channels.cache.get(S.checkChannelId)
     || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'cheater-reports');
@@ -1083,9 +1091,9 @@ async function ensureCheaterChannels(guild) {
   }
   if (checkChannel) {
     checkChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
-    if (checkerRoleId) {
-      checkChannel.permissionOverwrites.create(checkerRoleId, {
-        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory]
+    for (const rid of checkerRoleIds) {
+      checkChannel.permissionOverwrites.create(rid, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
       }).catch(() => {});
     }
     S.checkChannelId = checkChannel.id;
@@ -1110,9 +1118,9 @@ async function ensureCheaterChannels(guild) {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
       deny: [PermissionsBitField.Flags.SendMessages]
     }).catch(() => {});
-    if (checkerRoleId) {
-      reportChannel.permissionOverwrites.create(checkerRoleId, {
-        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory]
+    for (const rid of checkerRoleIds) {
+      reportChannel.permissionOverwrites.create(rid, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
       }).catch(() => {});
     }
     S.reportChannelId = reportChannel.id;
@@ -1138,6 +1146,11 @@ async function ensureCheaterChannels(guild) {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
       deny: [PermissionsBitField.Flags.SendMessages]
     }).catch(() => {});
+    for (const rid of checkerRoleIds) {
+      exposeChannel.permissionOverwrites.create(rid, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
+      }).catch(() => {});
+    }
     S.exposeChannelId = exposeChannel.id;
     settingsStore.saveSettings(S);
   }
@@ -1332,9 +1345,10 @@ async function handleReportPlatform(interaction) {
     }).catch(() => null);
     if (msg) {
       cheaterReports.updateReport(report.id, { channelId: checkChannel.id, messageId: msg.id });
-      const rid = getCheckerRoleId();
-      if (rid) await msg.edit({
-        content: `<@&${rid}> — new report ${report.id}!`,
+      const ids = getCheckerRoleIds();
+      const ping = ids.map(rid => `<@&${rid}>`).join(' ');
+      if (ids.length) await msg.edit({
+        content: `${ping} — new report ${report.id}!`,
         embeds: [buildReportEmbed(interaction.guild, report)],
         components: buildReportButtons(report)
       }).catch(() => {});
@@ -1402,9 +1416,8 @@ async function handleReportButton(interaction) {
     if (!thread) {
       return interaction.reply({ content: '⚠️ Could not create the proof thread. Try again.', ephemeral: true });
     }
-    const rid = getCheckerRoleId();
-    if (rid) {
-      thread.permissionOverwrites.create(rid, {
+    for (const tid of getCheckerRoleIds()) {
+      thread.permissionOverwrites.create(tid, {
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
       }).catch(() => {});
     }
@@ -2797,12 +2810,20 @@ client.on(Events.MessageCreate, async (message) => {
     const role = message.guild.roles.cache.get(roleId);
     if (!role) return message.reply('❌ Role not found in this server.');
     const S = settingsStore.loadSettings();
-    if (key === 'checker') S.checkerRoleId = roleId;
-    else S.cheaterMarkRoleId = roleId;
+    if (key === 'checker') {
+      const list = getCheckerRoleIds();
+      if (!list.includes(roleId)) list.push(roleId);
+      S.checkerRoleIds = list;
+      S.checkerRoleId = list[0];
+    } else {
+      S.cheaterMarkRoleId = roleId;
+    }
     settingsStore.saveSettings(S);
     await message.reply(`✅ **${key}** role set to <@&${roleId}>.`);
-    for (const g of message.client.guilds.cache.values()) {
-      ensureCheaterChannels(g).catch(() => {});
+    if (key === 'checker') {
+      for (const g of message.client.guilds.cache.values()) {
+        ensureCheaterChannels(g).catch(() => {});
+      }
     }
   } else if (content.startsWith('&jail')) {
     if (!canUseJail(message.member)) {

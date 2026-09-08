@@ -4,6 +4,7 @@ const path = require('path');
 const FILE = path.resolve(__dirname, '..', 'data', 'settings.json');
 
 const DEFAULTS = {
+  checkerRoleIds: [],
   checkerRoleId: null,
   cheaterMarkRoleId: null,
   reportChannelId: null,
