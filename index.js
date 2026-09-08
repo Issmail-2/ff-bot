@@ -979,7 +979,7 @@ async function syncInviteCache(guild) {
   return map;
 }
 
-client.once(Events.ClientReady, (c) => {
+client.once(Events.ClientReady, async (c) => {
   console.log(`✅ Logged in as ${c.user.tag}!`);
   for (const mode of ['amo', 'esport']) {
     try {
@@ -1012,6 +1012,14 @@ client.once(Events.ClientReady, (c) => {
       }
     }
     syncStoreEmbed(g).catch(e => console.log('[STORE] ready sync failed:', e.message));
+  }
+
+  if (guild && manager.getVoicePoolSize && manager.getVoicePoolSize() > 0) {
+    for (const mode of ['amo', 'esport']) {
+      try {
+        await manager.ensureVoicePool(guild, mode);
+      } catch (e) { console.log(`[POOL] ${mode} init error:`, e.message); }
+    }
   }
 });
 
@@ -1082,8 +1090,6 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(blacklistMessage(bl));
     }
 
-    await cleanupOldMessages(message.channel);
-
     const match = manager.createMatch(message.author.id, teamSize, message.channel.id, mode);
 
     const setupEmbed = new EmbedBuilder()
@@ -1103,8 +1109,7 @@ client.on(Events.MessageCreate, async (message) => {
         .setStyle(ButtonStyle.Danger)
     );
 
-    await message.delete().catch(() => {});
-    const msg = await message.channel.send({ embeds: [setupEmbed], components: [setupButton] });
+    const msg = await message.reply({ embeds: [setupEmbed], components: [setupButton] });
     match.message = msg.id;
     return;
   }
@@ -2361,6 +2366,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   try {
   const member = oldState.member || newState.member;
   if (!member || member.user.bot) return;
+  if (member.roles.cache.has('1546807156970487838')) return;
   if (manager.isSuppressed(member.id)) return;
   const match = manager.getActiveMatchForPlayer(member.id);
   if (!match || match.closing) return;
