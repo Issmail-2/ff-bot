@@ -56,7 +56,14 @@ const manager = require('./utils/matchManager');
 const blacklistModule = require('./utils/blacklist');
 const jailModule = require('./utils/jail');
 const storeModule = require('./utils/store');
+const settingsStore = require('./utils/settings');
+const cheaterReports = require('./utils/cheaterReports');
 const { COLORS, BRANDING, progressBar, divider } = require('./utils/ui');
+
+const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
+const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
+const REPORT_COST = parseInt(process.env.REPORT_COST || '', 10) || 50;
+const REPORT_REWARD = parseInt(process.env.REPORT_REWARD || '', 10) || 100;
 
 const client = new Client({
   intents: [
@@ -982,6 +989,478 @@ function refreshCombinedLeaderboard(guild) {
   syncCombinedLeaderboard(guild).catch(() => {});
 }
 
+const reportDrafts = new Map();
+const REPORT_PLATFORM_ICON = { PC: '🖥️', Android: '🤖', iOS: '🍎' };
+
+function getCheckerRoleId() {
+  const S = settingsStore.loadSettings();
+  return S.checkerRoleId || process.env.CHECKER_ROLE_ID || null;
+}
+
+function isChecker(member) {
+  if (!member) return false;
+  if (member.permissions.has('Administrator')) return true;
+  if (hasCommandAccess(member)) return true;
+  const rid = getCheckerRoleId();
+  if (rid && member.roles.cache.has(rid)) return true;
+  return false;
+}
+
+async function resolveReportPlayer(guild, text) {
+  const t = String(text || '').trim();
+  if (/^\d{15,20}$/.test(t)) {
+    const m = await guild.members.fetch(t).catch(() => null);
+    if (m) return { id: m.id, name: m.displayName || m.user.username };
+  }
+  const mention = t.match(/<@!?(\d{15,20})>/);
+  if (mention) {
+    const m = await guild.members.fetch(mention[1]).catch(() => null);
+    if (m) return { id: m.id, name: m.displayName || m.user.username };
+  }
+  const members = await guild.members.fetch().catch(() => []);
+  const lower = t.toLowerCase();
+  const found = members.find(mm => (mm.displayName || mm.user.username).toLowerCase() === lower)
+    || members.find(mm => (mm.displayName || mm.user.username).toLowerCase().includes(lower));
+  if (found) return { id: found.id, name: found.displayName || found.user.username };
+  return { id: null, name: t };
+}
+
+async function ensureReportButtonMessage(guild, channel) {
+  try {
+    const msgs = await channel.messages.fetch({ limit: 20 });
+    for (const m of msgs.values()) {
+      if (m.author.id === client.user.id && m.components && m.components.length) await m.delete().catch(() => {});
+    }
+  } catch (e) { /* ignore */ }
+  const embed = new EmbedBuilder()
+    .setTitle('🛡️ REPORT A PLAYER')
+    .setColor(COLORS.danger)
+    .setDescription(
+      `Facing a cheater? Report them here.\n` +
+      `\`\`\`${divider('═')}\`\`\`\n` +
+      `**Report cost:** ${REPORT_COST} pts (deducted from your balance)\n` +
+      `**Reward:** if the player is confirmed as a cheater you earn **+${REPORT_REWARD} pts** and a reward role.\n` +
+      `False reports are **not refunded**.`
+    )
+    .setFooter({ text: BRANDING });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('report_player').setEmoji('🛡️').setLabel('Report Player').setStyle(ButtonStyle.Danger)
+  );
+  await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+}
+
+async function ensureCheaterChannels(guild) {
+  const S = settingsStore.loadSettings();
+
+  let category = guild.channels.cache.get(S.exposeCategoryId || EXPOSE_CATEGORY_ID)
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === 'expose');
+  if (!category) {
+    try {
+      category = await guild.channels.create({ name: 'expose', type: ChannelType.GuildCategory });
+    } catch (e) {
+      console.log('[CHEAT] create category failed:', e.message);
+    }
+  }
+  if (category) {
+    S.exposeCategoryId = category.id;
+    settingsStore.saveSettings(S);
+  }
+
+  const checkerRoleId = getCheckerRoleId();
+
+  let checkChannel = guild.channels.cache.get(S.checkChannelId)
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'cheater-reports');
+  if (!checkChannel) {
+    try {
+      checkChannel = await guild.channels.create({
+        name: 'cheater-reports',
+        type: ChannelType.GuildText,
+        parent: category ? category.id : undefined
+      });
+    } catch (e) {
+      console.log('[CHEAT] create check channel failed:', e.message);
+    }
+  }
+  if (checkChannel) {
+    checkChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
+    if (checkerRoleId) {
+      checkChannel.permissionOverwrites.create(checkerRoleId, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory]
+      }).catch(() => {});
+    }
+    S.checkChannelId = checkChannel.id;
+    settingsStore.saveSettings(S);
+  }
+
+  let reportChannel = guild.channels.cache.get(S.reportChannelId)
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'report-player');
+  if (!reportChannel) {
+    try {
+      reportChannel = await guild.channels.create({
+        name: 'report-player',
+        type: ChannelType.GuildText,
+        parent: category ? category.id : undefined
+      });
+    } catch (e) {
+      console.log('[CHEAT] create report channel failed:', e.message);
+    }
+  }
+  if (reportChannel) {
+    reportChannel.permissionOverwrites.create(guild.id, {
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
+      deny: [PermissionsBitField.Flags.SendMessages]
+    }).catch(() => {});
+    if (checkerRoleId) {
+      reportChannel.permissionOverwrites.create(checkerRoleId, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory]
+      }).catch(() => {});
+    }
+    S.reportChannelId = reportChannel.id;
+    settingsStore.saveSettings(S);
+    await ensureReportButtonMessage(guild, reportChannel);
+  }
+
+  let exposeChannel = guild.channels.cache.get(S.exposeChannelId)
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'expose');
+  if (!exposeChannel) {
+    try {
+      exposeChannel = await guild.channels.create({
+        name: 'expose',
+        type: ChannelType.GuildText,
+        parent: category ? category.id : undefined
+      });
+    } catch (e) {
+      console.log('[CHEAT] create expose channel failed:', e.message);
+    }
+  }
+  if (exposeChannel) {
+    exposeChannel.permissionOverwrites.create(guild.id, {
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
+      deny: [PermissionsBitField.Flags.SendMessages]
+    }).catch(() => {});
+    S.exposeChannelId = exposeChannel.id;
+    settingsStore.saveSettings(S);
+  }
+
+  console.log(`[CHEAT] channels ensured (report ${S.reportChannelId}, check ${S.checkChannelId}, expose ${S.exposeChannelId})`);
+}
+
+function buildReportEmbed(guild, report) {
+  const statusMap = {
+    pending: '⏳ Pending',
+    claimed: '🙋 Claimed',
+    clean: '✅ Marked Clean',
+    marked: '🚫 Marked Cheater',
+    cancelled: '🗑️ Cancelled'
+  };
+  const cheater = report.cheaterId ? `<@${report.cheaterId}>` : `**${report.cheaterName}**`;
+  return new EmbedBuilder()
+    .setTitle(`🛡️ CHEATER REPORT ${report.id}`)
+    .setColor(COLORS.danger)
+    .setDescription(
+      `\`\`\`${divider('═')}\`\`\`\n` +
+      `**👤 Reported player**  ${cheater}\n` +
+      `**🌐 Platform**  ${REPORT_PLATFORM_ICON[report.platform] || '🔘'} ${report.platform}\n` +
+      `**🗡️ Reported by**  <@${report.reporterId}>\n` +
+      `**🕒 At**  <t:${Math.floor(report.at / 1000)}:f>\n` +
+      `**⚡ Status**  ${statusMap[report.status] || report.status}\n` +
+      `${report.claimedBy ? `**🙋 Claimed by**  <@${report.claimedBy}>\n` : ''}` +
+      `${report.status === 'marked' && report.checkedBy ? `**🕵️ Checked by**  <@${report.checkedBy}>` : ''}`
+    )
+    .setFooter({ text: `${report.guildId ? '' : ''}${BRANDING}` });
+}
+
+function buildReportButtons(report) {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`rpt_clean_${report.id}`).setEmoji('✅').setLabel('Mark Clean').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`rpt_cheat_${report.id}`).setEmoji('🚫').setLabel('Mark Cheater').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`rpt_claim_${report.id}`).setEmoji('🙋').setLabel('Claim Check').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`rpt_cancel_${report.id}`).setEmoji('🗑️').setLabel('Cancel Check').setStyle(ButtonStyle.Secondary)
+  )];
+}
+
+async function renderReportMessage(guild, report) {
+  const S = settingsStore.loadSettings();
+  const ch = guild.channels.cache.get(report.channelId || S.checkChannelId);
+  if (!ch) return;
+  const msg = await ch.messages.fetch(report.messageId).catch(() => null);
+  if (!msg) return;
+  const final = ['clean', 'marked', 'cancelled'].includes(report.status);
+  const content = report.status === 'marked' && report.checkedBy ? `⛔ Confirmed as cheater by <@${report.checkedBy}>` : '';
+  await msg.edit({
+    content,
+    embeds: [buildReportEmbed(guild, report)],
+    components: final ? [] : buildReportButtons(report)
+  }).catch(() => {});
+}
+
+async function postExpose(guild, report, checkerId, attachments) {
+  const S = settingsStore.loadSettings();
+  const channel = guild.channels.cache.get(S.exposeChannelId);
+  if (!channel) return;
+  const cheaterName = report.cheaterId ? (await getPlayerName(guild, report.cheaterId)) : report.cheaterName;
+  const embed = new EmbedBuilder()
+    .setTitle('⛔ EXPOSED CHEATER')
+    .setColor(COLORS.danger)
+    .setDescription(
+      `\`\`\`${divider('═')}\`\`\`\n` +
+      `**👤 Cheater**  <@${report.cheaterId || '—'}>  (${cheaterName})\n` +
+      `**🆔 Cheater ID**  \`${report.cheaterId || 'unknown'}\`\n` +
+      `**🌐 Platform**  ${REPORT_PLATFORM_ICON[report.platform] || '🔘'} ${report.platform}\n` +
+      `**🗡️ Reported by**  <@${report.reporterId}>\n` +
+      `**🕵️ Checked by**  <@${checkerId}>\n` +
+      `**Report**  ${report.id}\n` +
+      `**🕒 At**  <t:${Math.floor(report.at / 1000)}:f>\n` +
+      `\`\`\`${divider('═')}\`\`\``
+    )
+    .setFooter({ text: BRANDING });
+  const files = (attachments || []).map(u => ({ attachment: u }));
+  await channel.send({ embeds: [embed], files }).catch(() => {});
+}
+
+async function applyCheaterAction(guild, report) {
+  const member = await guild.members.fetch(report.cheaterId).catch(() => null);
+  if (member) {
+    const res = await applyJail(guild, member).catch(() => ({ role: null, affected: [], removedRoles: [] }));
+    await member.roles.add(CHEATER_ROLE_ID).catch(() => {});
+    if (res.role) {
+      jailModule.jailUser(report.cheaterId, res.role.id, guild.id, null, `Cheater (${report.id})`, report.checkedBy || 'checker', res.affected, res.removedRoles);
+    }
+    console.log(`[CHEAT] ${report.cheaterId} jailed + cheater role ${CHEATER_ROLE_ID} applied`);
+  } else {
+    console.log(`[CHEAT] cheater ${report.cheaterId || report.cheaterName} could not be resolved in guild`);
+  }
+
+  storage.adjustPoints(report.reporterId, REPORT_REWARD, 'amo');
+  const roleId = settingsStore.loadSettings().cheaterMarkRoleId;
+  if (roleId) {
+    const reporter = await guild.members.fetch(report.reporterId).catch(() => null);
+    if (reporter) await reporter.roles.add(roleId).catch(() => {});
+  }
+  refreshCombinedLeaderboard(guild);
+  try {
+    const reporter = await guild.members.fetch(report.reporterId).catch(() => null);
+    if (reporter) {
+      const msg = `🛡️ **Report ${report.id} confirmed!** The player you reported was marked as a cheater.\nYou earned **+${REPORT_REWARD} pts**${roleId ? ' and a reward role.' : '.'}`;
+      await reporter.send(msg).catch(() => {});
+    }
+  } catch { /* ignore */ }
+}
+
+async function handleReportStart(interaction) {
+  const bal = storage.getPlayerPoints(interaction.user.id, 'amo');
+  if (bal.totalPoints < REPORT_COST) {
+    return interaction.reply({ content: `❌ Reporting costs **${REPORT_COST} pts** (your balance: ${bal.totalPoints} pts). Earn more in matches.`, ephemeral: true });
+  }
+  const token = `d${Date.now()}_${Math.floor(Math.random() * 9999)}`;
+  reportDrafts.set(token, { reporterId: interaction.user.id });
+  setTimeout(() => reportDrafts.delete(token), 10 * 60 * 1000);
+
+  const modal = new ModalBuilder().setCustomId(`reportmodal_${token}`).setTitle('🛡️ Report a player');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('rpName').setLabel('Reported player (name)').setStyle(TextInputStyle.Short).setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('rpId').setLabel('Player ID or @mention (optional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Paste the ID or mention — helps the checker')
+    )
+  );
+  return interaction.showModal(modal);
+}
+
+async function handleReportModal(interaction) {
+  const token = interaction.customId.replace('reportmodal_', '');
+  const draft = reportDrafts.get(token);
+  if (!draft) {
+    return interaction.reply({ content: '⏳ That report session expired. Press **Report Player** again.', ephemeral: true });
+  }
+  const playerName = interaction.fields.getTextInputValue('rpName').trim();
+  const extraId = interaction.fields.getTextInputValue('rpId').trim();
+  await interaction.deferReply({ ephemeral: true });
+  const resolved = await resolveReportPlayer(interaction.guild, extraId || playerName);
+  draft.cheaterName = (resolved.name || playerName).slice(0, 32);
+  draft.cheaterId = resolved.id;
+
+  const embed = new EmbedBuilder()
+    .setTitle('🌐 SELECT PLATFORM')
+    .setColor(COLORS.info)
+    .setDescription(
+      `Reported player: ${draft.cheaterId ? `<@${draft.cheaterId}>` : `**${draft.cheaterName}**`}\n` +
+      `Select the platform they play on to finalize the report.`
+    )
+    .setFooter({ text: BRANDING });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`reportplat_${token}_pc`).setEmoji('🖥️').setLabel('PC').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`reportplat_${token}_android`).setEmoji('🤖').setLabel('Android').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`reportplat_${token}_ios`).setEmoji('🍎').setLabel('iOS').setStyle(ButtonStyle.Secondary)
+  );
+  return interaction.editReply({ embeds: [embed], components: [row] });
+}
+
+async function handleReportPlatform(interaction) {
+  const parts = interaction.customId.replace('reportplat_', '').split('_');
+  const token = parts.slice(0, 2).join('_');
+  const platform = parts[2] || 'pc';
+  const draft = reportDrafts.get(token);
+  if (!draft) {
+    return interaction.update({ embeds: [], components: [], content: '⏳ That report session expired. Start again with **Report Player**.' });
+  }
+  reportDrafts.delete(token);
+
+  const bal = storage.getPlayerPoints(interaction.user.id, 'amo');
+  if (bal.totalPoints < REPORT_COST) {
+    return interaction.update({ embeds: [], components: [], content: `❌ You need **${REPORT_COST} pts** (balance: ${bal.totalPoints}).` });
+  }
+  storage.adjustPoints(interaction.user.id, -REPORT_COST, 'amo');
+
+  const platformLabel = platform === 'pc' ? 'PC' : platform === 'android' ? 'Android' : 'iOS';
+  const report = cheaterReports.addReport({
+    reporterId: interaction.user.id,
+    reporterName: interaction.user.displayName || interaction.user.username,
+    cheaterName: draft.cheaterName,
+    cheaterId: draft.cheaterId,
+    platform: platformLabel,
+    guildId: interaction.guild.id
+  });
+
+  const S = settingsStore.loadSettings();
+  const checkChannel = interaction.guild.channels.cache.get(S.checkChannelId);
+  if (checkChannel) {
+    const msg = await checkChannel.send({
+      embeds: [buildReportEmbed(interaction.guild, report)],
+      components: buildReportButtons(report)
+    }).catch(() => null);
+    if (msg) {
+      cheaterReports.updateReport(report.id, { channelId: checkChannel.id, messageId: msg.id });
+      const rid = getCheckerRoleId();
+      if (rid) await msg.edit({
+        content: `<@&${rid}> — new report ${report.id}!`,
+        embeds: [buildReportEmbed(interaction.guild, report)],
+        components: buildReportButtons(report)
+      }).catch(() => {});
+    }
+  }
+
+  refreshCombinedLeaderboard(interaction.guild);
+  const success = new EmbedBuilder()
+    .setTitle('🛡️ REPORT SUBMITTED')
+    .setColor(COLORS.success)
+    .setDescription(
+      `**${REPORT_COST} pts** were deducted.\n` +
+      `If **${draft.cheaterName}** is confirmed as a cheater you will receive **+${REPORT_REWARD} pts** and a reward role.`
+    )
+    .setFooter({ text: BRANDING });
+  return interaction.update({ embeds: [success], components: [] });
+}
+
+async function handleReportButton(interaction) {
+  const parts = interaction.customId.replace('rpt_', '').split('_');
+  const action = parts[0];
+  const id = parts.slice(1).join('_');
+  if (!isChecker(interaction.member)) {
+    return interaction.reply({ content: '❌ Only **checkers** can use these buttons!', ephemeral: true });
+  }
+  const report = cheaterReports.getReport(id);
+  if (!report) return interaction.reply({ content: '❌ Report not found.', ephemeral: true });
+
+  if (action === 'claim') {
+    if (report.claimedBy && report.claimedBy !== interaction.user.id) {
+      return interaction.reply({ content: `❌ This report is already claimed by <@${report.claimedBy}>.`, ephemeral: true });
+    }
+    cheaterReports.updateReport(id, { claimedBy: interaction.user.id });
+    await renderReportMessage(interaction.guild, cheaterReports.getReport(id));
+    return interaction.reply({ content: `🙋 You claimed **${id}**.`, ephemeral: true });
+  }
+
+  if (action === 'cancel') {
+    cheaterReports.updateReport(id, { status: 'cancelled' });
+    await renderReportMessage(interaction.guild, cheaterReports.getReport(id));
+    return interaction.reply({ content: `🗑️ Report **${id}** cancelled. Buttons removed — the message stays as history.`, ephemeral: true });
+  }
+
+  if (action === 'clean') {
+    cheaterReports.updateReport(id, { status: 'clean', checkedBy: interaction.user.id });
+    await renderReportMessage(interaction.guild, cheaterReports.getReport(id));
+    return interaction.reply({ content: `✅ Report **${id}** marked as **clean**. No refund for the reporter.`, ephemeral: true });
+  }
+
+  if (action === 'cheat') {
+    cheaterReports.updateReport(id, { status: 'marked', checkedBy: interaction.user.id, claimedBy: interaction.user.id });
+    const updated = cheaterReports.getReport(id);
+    await renderReportMessage(interaction.guild, updated);
+
+    let thread = null;
+    try {
+      thread = await interaction.message.startThread({
+        name: `check-${report.id}`,
+        autoArchiveDuration: 1440,
+        reason: 'Cheater proof collection'
+      });
+    } catch (e) {
+      console.log('[CHEAT] startThread failed:', e.message);
+    }
+    if (!thread) {
+      return interaction.reply({ content: '⚠️ Could not create the proof thread. Try again.', ephemeral: true });
+    }
+    const rid = getCheckerRoleId();
+    if (rid) {
+      thread.permissionOverwrites.create(rid, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
+      }).catch(() => {});
+    }
+    const embed = new EmbedBuilder()
+      .setTitle(`🔍 PROOF COLLECTION — ${report.id}`)
+      .setColor(COLORS.info)
+      .setDescription(
+        `Upload **screenshots / videos** as messages in this thread.\n` +
+        `When everything is attached, press **✅ Done** to post the exposé.\n\n` +
+        `Cheater: ${report.cheaterId ? `<@${report.cheaterId}>` : report.cheaterName}`
+      )
+      .setFooter({ text: BRANDING });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`rpt_done_${report.id}`).setEmoji('✅').setLabel('Done — Post Exposé').setStyle(ButtonStyle.Success)
+    );
+    await thread.send({ embeds: [embed], components: [row] }).catch(() => {});
+    return interaction.reply({ content: `🔍 Proof collection started in a private thread. Upload the proofs, then press **Done**.`, ephemeral: true });
+  }
+
+  return interaction.reply({ content: '⚠️ Unknown report action.', ephemeral: true });
+}
+
+async function handleProofDone(interaction) {
+  if (!isChecker(interaction.member)) {
+    return interaction.reply({ content: '❌ Only **checkers** can do this!', ephemeral: true });
+  }
+  const id = interaction.customId.replace('rpt_done_', '');
+  const report = cheaterReports.getReport(id);
+  if (!report) return interaction.reply({ content: '❌ Report not found.', ephemeral: true });
+
+  let attachments = [];
+  const thread = interaction.channel;
+  if (thread && thread.isThread()) {
+    try {
+      const msgs = await thread.messages.fetch({ limit: 100 });
+      for (const m of msgs.values()) {
+        if (m.attachments) for (const a of m.attachments.values()) attachments.push(a.url);
+      }
+    } catch (e) { console.log('[CHEAT] fetch proof msgs failed:', e.message); }
+  }
+  attachments = attachments.slice(0, 10);
+
+  await postExpose(interaction.guild, report, interaction.user.id, attachments);
+  if (report.cheaterId) {
+    await applyCheaterAction(interaction.guild, report);
+  } else {
+    console.log(`[CHEAT] report ${id} marked cheater but no resolvable id — skipped jail/reward`);
+  }
+
+  const updated = cheaterReports.getReport(id);
+  await renderReportMessage(interaction.guild, updated);
+
+  await interaction.reply({ content: `⛔ **Exposé posted** for ${id}${report.cheaterId ? '' : ' — but the reported player had no resolvable ID (no jail/reward applied).'}`, ephemeral: true });
+  try { await thread.setArchived(true).catch(() => {}); } catch { /* ignore */ }
+}
+
 async function handleBuy(interaction, itemId) {
   const item = storeModule.getItems().find(i => i.id === String(itemId).trim());
   if (!item) {
@@ -1078,6 +1557,9 @@ client.once(Events.ClientReady, async (c) => {
   }
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
   postCommandsInfoWithRetry();
+  for (const g of c.guilds.cache.values()) {
+    ensureCheaterChannels(g).catch(() => {});
+  }
   const guild = c.guilds.cache.first();
   const ranked = computeCombinedRanking();
   if (guild && ranked.length) applyRankOneRole(guild, ranked).catch(() => {});
@@ -1456,6 +1938,30 @@ async function performJoin(interaction, match, team) {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+  if (interaction.isButton() && interaction.customId === 'report_player') {
+    return handleReportStart(interaction);
+  }
+  if (interaction.isButton() && interaction.customId.startsWith('reportplat_')) {
+    return await handleReportPlatform(interaction);
+  }
+  if (interaction.isButton() && interaction.customId.startsWith('rpt_claim_')) {
+    return handleReportButton(interaction);
+  }
+  if (interaction.isButton() && interaction.customId.startsWith('rpt_cancel_')) {
+    return handleReportButton(interaction);
+  }
+  if (interaction.isButton() && interaction.customId.startsWith('rpt_clean_')) {
+    return handleReportButton(interaction);
+  }
+  if (interaction.isButton() && interaction.customId.startsWith('rpt_cheat_')) {
+    return handleReportButton(interaction);
+  }
+  if (interaction.isButton() && interaction.customId.startsWith('rpt_done_')) {
+    return await handleProofDone(interaction);
+  }
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('reportmodal_')) {
+    return await handleReportModal(interaction);
+  }
   if (interaction.isModalSubmit() && interaction.customId.startsWith('roommodal_')) {
     const matchId = interaction.customId.replace('roommodal_', '');
     console.log(`[MODAL] submit received for match ${matchId}`);
@@ -2174,6 +2680,45 @@ client.on(Events.MessageCreate, async (message) => {
       embed.addFields({ name: '🛒 You can afford', value: affordable.slice(0, 10).map(it => `- **${it.name}** (${it.cost} pts)${it.stock !== null ? ` — ${it.stock} left` : ''}`).join('\n') });
     }
     return message.reply({ embeds: [embed] });
+  } else if (content === '!stats' || content.startsWith('!stats ')) {
+    let targetId = message.author.id;
+    const rest = message.content.replace(/^!stats\s*/i, '').trim();
+    const mention = message.mentions.users.first();
+    if (rest) {
+      const m = rest.match(/\d{15,20}/);
+      if (mention) targetId = mention.id;
+      else if (m) targetId = m[0];
+    }
+    const amo = storage.getPlayerPoints(targetId, 'amo');
+    const esp = storage.getPlayerPoints(targetId, 'esport');
+    const ranked = computeCombinedRanking();
+    const combinedIdx = ranked.findIndex(([id]) => id === targetId);
+    const combinedPts = (amo.totalPoints || 0) + (esp.totalPoints || 0);
+    const combinedWins = (amo.wins || 0) + (esp.wins || 0);
+    const combinedMatches = (amo.matchesPlayed || 0) + (esp.matchesPlayed || 0);
+    const mvpCount = (amo.mvpCount || 0) + (esp.mvpCount || 0);
+    const winRate = combinedMatches ? Math.round((combinedWins / combinedMatches) * 100) : 0;
+    const members = message.guild.members.cache.get(targetId);
+    const label = targetId === message.author.id ? 'Your' : `${members ? members.displayName : targetId}`;
+    const rankEmoji = combinedIdx === 0 ? '🥇' : combinedIdx === 1 ? '🥈' : combinedIdx === 2 ? '🥉' : '🏅';
+    const embed = new EmbedBuilder()
+      .setTitle(`📊 ${label}'s STATS`)
+      .setColor(COLORS.info)
+      .setDescription(
+        `\`\`\`${divider('═')}\`\`\`\n` +
+        `**💰 Total points**  ${combinedPts} pts\n` +
+        `${combinedIdx !== -1 ? `**🥇 Combined rank**  ${rankEmoji} **#${combinedIdx + 1}**\n` : ''}` +
+        `**🏆 Matches**  ${combinedMatches}  (${combinedWins}W / ${combinedMatches - combinedWins}L)\n` +
+        `**🔢 Win rate**  ${winRate}%\n` +
+        `**⭐ MVP count**  ${mvpCount}\n` +
+        `\`\`\`${divider('═')}\`\`\``
+      )
+      .addFields(
+        { name: `🏆 ${getModeConfig('amo').displayName}`, value: `**${amo.totalPoints || 0} pts**\n${amo.wins || 0}W / ${amo.losses || 0}L\n${storage.getRankBadge(targetId, 'amo') || 'Unranked'}`, inline: true },
+        { name: `⚔️ ${getModeConfig('esport').displayName}`, value: `**${esp.totalPoints || 0} pts**\n${esp.wins || 0}W / ${esp.losses || 0}L\n${storage.getRankBadge(targetId, 'esport') || 'Unranked'}`, inline: true }
+      )
+      .setFooter({ text: BRANDING });
+    return message.reply({ embeds: [embed] });
   } else if (content === '!leaderboard') {
     await adminCommands.leaderboard(message, mode);
   } else if (content === '!resetpoints') {
@@ -2234,6 +2779,31 @@ client.on(Events.MessageCreate, async (message) => {
     }
     const removed = blacklistModule.unblacklistUser(userId);
     await message.reply(removed ? `✅ <@${userId}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
+  } else if (content.startsWith('&setrole')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can set roles!');
+    }
+    const args = message.content.trim().split(/\s+/);
+    const key = (args[1] || '').toLowerCase();
+    if (!['checker', 'cheatermark'].includes(key)) {
+      return message.reply('Usage: `&setrole <checker|cheatermark> <roleId|@role>`');
+    }
+    const roleMention = message.mentions.roles.first();
+    const roleInput = args[2] || '';
+    const roleId = roleMention ? roleMention.id : (roleInput.match(/\d{15,20}/) ? roleInput.match(/\d{15,20}/)[0] : null);
+    if (!roleId) {
+      return message.reply('❌ Provide a valid role ID or @role.');
+    }
+    const role = message.guild.roles.cache.get(roleId);
+    if (!role) return message.reply('❌ Role not found in this server.');
+    const S = settingsStore.loadSettings();
+    if (key === 'checker') S.checkerRoleId = roleId;
+    else S.cheaterMarkRoleId = roleId;
+    settingsStore.saveSettings(S);
+    await message.reply(`✅ **${key}** role set to <@&${roleId}>.`);
+    for (const g of message.client.guilds.cache.values()) {
+      ensureCheaterChannels(g).catch(() => {});
+    }
   } else if (content.startsWith('&jail')) {
     if (!canUseJail(message.member)) {
       return message.reply('❌ Only admins can jail players!');
