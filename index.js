@@ -587,10 +587,10 @@ async function updateMatchChannel(guild, match) {
     .setTitle(`🏠 ROOM INFO`)
     .setColor(COLORS.primary)
     .setDescription(
-      `**▫️ Room ID**  \`${match.roomId}\`\n` +
-      `**▫️ Room Name**  \`${match.roomName || '—'}\`\n` +
-      `**▫️ Password**  \`${match.password || '—'}\`\n` +
-      `**▫️ Match Key**  \`${match.key || '—'}\``
+      `**▫️ Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
+      `**▫️ Room Name** _(hover to copy)_\n\`\`\`${match.roomName || '—'}\`\`\`\n` +
+      `**▫️ Password** _(hover to copy)_\n\`\`\`${match.password || '—'}\`\`\`\n` +
+      `**▫️ Match Key** _(hover to copy)_\n\`\`\`${match.key || '—'}\`\`\``
     )
     .addFields(
       { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: list1 || '*Empty*', inline: true },
@@ -727,8 +727,9 @@ function buildMainMatchEmbed(match) {
     .setColor(COLORS.gold)
     .setDescription(
       `\`\`\`${divider('═')}\`\`\`\n` +
-      `🔑 **Room ID** \`${match.roomId}\`   🖥️ **Name** \`${roomName}\`\n` +
-      `🔒 **Password** \`${match.password}\``
+      `🔑 **Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
+      `🖥️ **Room Name** _(hover to copy)_\n\`\`\`${roomName}\`\`\`\n` +
+      `🔒 **Password** _(hover to copy)_\n\`\`\`${match.password}\`\`\``
     )
     .addFields(
       { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: t1Field, inline: true },
