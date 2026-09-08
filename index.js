@@ -62,6 +62,7 @@ const { COLORS, BRANDING, progressBar, divider } = require('./utils/ui');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
+const APPLY_CATEGORY_ID = process.env.APPLY_CATEGORY_ID || '1476278897107538023';
 const REPORT_COST = parseInt(process.env.REPORT_COST || '', 10) || 50;
 const REPORT_REWARD = parseInt(process.env.REPORT_REWARD || '', 10) || 100;
 
@@ -1474,6 +1475,302 @@ async function handleProofDone(interaction) {
   try { await thread.setArchived(true).catch(() => {}); } catch { /* ignore */ }
 }
 
+const applyApps = new Map();
+const APPLY_TYPE_LABEL = { checker: '🛡️ Checker', staff: '👥 Staff' };
+
+function getStaffRoleIds() {
+  const S = settingsStore.loadSettings();
+  const set = new Set();
+  for (const id of getCheckerRoleIds()) if (id) set.add(id);
+  for (const id of (config.adminRoles || [])) if (id) set.add(id);
+  if (S.applyCheckerRoleId) set.add(S.applyCheckerRoleId);
+  if (S.applyStaffRoleId) set.add(S.applyStaffRoleId);
+  return [...set];
+}
+
+function isStaff(member) {
+  if (!member) return false;
+  return member.permissions.has('Administrator') || hasCommandAccess(member) || isChecker(member);
+}
+
+async function getApplyRole(guild, roleType) {
+  const S = settingsStore.loadSettings();
+  if (roleType === 'checker') {
+    if (S.applyCheckerRoleId && guild.roles.cache.get(S.applyCheckerRoleId)) return guild.roles.cache.get(S.applyCheckerRoleId);
+    const firstExisting = getCheckerRoleIds().map(id => guild.roles.cache.get(id)).find(Boolean);
+    if (firstExisting) return firstExisting;
+    return guild.roles.cache.find(r => r.name.toLowerCase() === 'checker') || null;
+  }
+  if (S.applyStaffRoleId && guild.roles.cache.get(S.applyStaffRoleId)) return guild.roles.cache.get(S.applyStaffRoleId);
+  const named = guild.roles.cache.find(r => r.name.toLowerCase() === 'staff');
+  if (named) return named;
+  const firstAdmin = (config.adminRoles || []).map(id => guild.roles.cache.get(id)).find(Boolean);
+  return firstAdmin || null;
+}
+
+async function ensureApplyButtonMessage(guild, channel) {
+  try {
+    const msgs = await channel.messages.fetch({ limit: 20 });
+    for (const m of msgs.values()) {
+      if (m.author.id === client.user.id && m.components && m.components.length) await m.delete().catch(() => {});
+    }
+  } catch (e) { /* ignore */ }
+  const embed = new EmbedBuilder()
+    .setTitle('📋 ROLE APPLICATION')
+    .setColor(COLORS.info)
+    .setDescription(
+      `Want to join the team? Pick the role you are applying for.\n` +
+      `\`\`\`${divider('═')}\`\`\`\n` +
+      `**🛡️ Checker**  — review reports, run tests and keep matches clean.\n` +
+      `**👥 Staff**  — help manage the server and events.\n` +
+      `After you apply, staff will interview you in a voice channel to decide.`
+    )
+    .setFooter({ text: BRANDING });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('apply_start_checker').setEmoji('🛡️').setLabel('Checker Apply').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('apply_start_staff').setEmoji('👥').setLabel('Staff Apply').setStyle(ButtonStyle.Primary)
+  );
+  await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+}
+
+async function ensureApplyChannels(guild) {
+  const S = settingsStore.loadSettings();
+
+  let category = guild.channels.cache.get(S.applyCategoryId || APPLY_CATEGORY_ID)
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === 'role apply');
+  if (!category) {
+    try {
+      category = await guild.channels.create({ name: 'Role Apply', type: ChannelType.GuildCategory });
+    } catch (e) {
+      console.log('[APPLY] create category failed:', e.message);
+    }
+  }
+  if (category) {
+    S.applyCategoryId = category.id;
+    settingsStore.saveSettings(S);
+  }
+
+  let applyChannel = guild.channels.cache.get(S.applyChannelId)
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'role-apply');
+  if (!applyChannel) {
+    try {
+      applyChannel = await guild.channels.create({
+        name: 'role-apply',
+        type: ChannelType.GuildText,
+        parent: category ? category.id : undefined
+      });
+    } catch (e) {
+      console.log('[APPLY] create apply channel failed:', e.message);
+    }
+  }
+  if (applyChannel) {
+    applyChannel.permissionOverwrites.create(guild.id, {
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
+      deny: [PermissionsBitField.Flags.SendMessages]
+    }).catch(() => {});
+    S.applyChannelId = applyChannel.id;
+    settingsStore.saveSettings(S);
+    await ensureApplyButtonMessage(guild, applyChannel);
+  }
+
+  let queueChannel = guild.channels.cache.get(S.applyQueueChannelId)
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'role-applications');
+  if (!queueChannel) {
+    try {
+      queueChannel = await guild.channels.create({
+        name: 'role-applications',
+        type: ChannelType.GuildText,
+        parent: category ? category.id : undefined
+      });
+    } catch (e) {
+      console.log('[APPLY] create queue channel failed:', e.message);
+    }
+  }
+  if (queueChannel) {
+    queueChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
+    for (const rid of getStaffRoleIds()) {
+      queueChannel.permissionOverwrites.create(rid, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
+      }).catch(() => {});
+    }
+    S.applyQueueChannelId = queueChannel.id;
+    settingsStore.saveSettings(S);
+  }
+
+  const vcNames = ['⏳ Waiting for Apply', '🛡️ Checker Role', '👥 Staff Role'];
+  for (const vcName of vcNames) {
+    let vc = category ? category.children.cache.find(c => c.type === ChannelType.GuildVoice && c.name === vcName) : guild.channels.cache.find(c => c.type === ChannelType.GuildVoice && c.name === vcName);
+    if (!vc) {
+      try {
+        vc = await guild.channels.create({ name: vcName, type: ChannelType.GuildVoice, parent: category ? category.id : undefined });
+      } catch (e) {
+        console.log('[APPLY] create voice failed:', e.message);
+      }
+    }
+  }
+
+  console.log(`[APPLY] channels ensured (apply ${S.applyChannelId}, queue ${S.applyQueueChannelId}, cat ${S.applyCategoryId})`);
+}
+
+function buildApplyEmbed(guild, app) {
+  const statusMap = { pending: '⏳ Pending', accepted: '✅ Accepted', declined: '❌ Declined' };
+  return new EmbedBuilder()
+    .setTitle(`📋 ROLE APPLICATION ${app.id}`)
+    .setColor(COLORS.info)
+    .setDescription(
+      `\`\`\`${divider('═')}\`\`\`\n` +
+      `**🛡️ Role**  ${APPLY_TYPE_LABEL[app.roleType] || app.roleType}\n` +
+      `**🧑 Applicant**  <@${app.userId}>\n` +
+      `**🎮 In-game name**  ${app.ign}\n` +
+      `**💬 Why / experience**  ${app.why.length > 900 ? app.why.slice(0, 900) + '…' : app.why}\n` +
+      `**🕒 Submitted**  <t:${Math.floor(app.at / 1000)}:f>\n` +
+      `**⚡ Status**  ${statusMap[app.status] || app.status}`
+    )
+    .setFooter({ text: BRANDING });
+}
+
+function buildApplyButtons(appId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`app_wait_${appId}`).setEmoji('⏳').setLabel('Waiting VC').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`app_checkervc_${appId}`).setEmoji('🛡️').setLabel('Checker VC').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`app_staffvc_${appId}`).setEmoji('👥').setLabel('Staff VC').setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`app_accept_${appId}`).setEmoji('✅').setLabel('Accept').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`app_decline_${appId}`).setEmoji('❌').setLabel('Decline').setStyle(ButtonStyle.Danger)
+    )
+  ];
+}
+
+async function handleApplyStart(interaction, roleType) {
+  if (isStaff(interaction.member)) {
+    return interaction.reply({ content: 'ℹ️ You already have staff roles — no application needed.', ephemeral: true });
+  }
+  const modal = new ModalBuilder().setCustomId(`applymodal_${roleType}_${Date.now()}_${Math.floor(Math.random() * 9999)}`).setTitle(`${APPLY_TYPE_LABEL[roleType]} — ROLE APPLICATION`);
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('applyIgn').setLabel('In-game name').setStyle(TextInputStyle.Short).setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('applyAge').setLabel('Age').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('minimum 13')
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('applyWhy').setLabel('Why should we trust you? (experience / activity)').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('Tell us about your experience, schedule and why you deserve the role.')
+    )
+  );
+  return interaction.showModal(modal);
+}
+
+async function handleApplyModal(interaction) {
+  const parts = interaction.customId.replace('applymodal_', '').split('_');
+  const roleType = ['checker', 'staff'].includes(parts[0]) ? parts[0] : 'checker';
+  const ign = interaction.fields.getTextInputValue('applyIgn').trim().slice(0, 32) || 'unknown';
+  const age = interaction.fields.getTextInputValue('applyAge').trim().slice(0, 8) || '?';
+  const why = (interaction.fields.getTextInputValue('applyWhy') || '').trim().slice(0, 1000) || 'No details provided';
+
+  const app = {
+    id: `A${Date.now()}${Math.floor(Math.random() * 90 + 10)}`,
+    userId: interaction.user.id,
+    ign: `${ign} (${age})`,
+    why,
+    roleType,
+    status: 'pending',
+    at: Date.now()
+  };
+  applyApps.set(app.id, app);
+
+  const S = settingsStore.loadSettings();
+  const queueChannel = interaction.guild.channels.cache.get(S.applyQueueChannelId);
+  let posted = false;
+  if (queueChannel) {
+    const msg = await queueChannel.send({
+      embeds: [buildApplyEmbed(interaction.guild, app)],
+      components: buildApplyButtons(app.id)
+    }).catch(() => null);
+    if (msg) {
+      app.messageId = msg.id;
+      app.channelId = queueChannel.id;
+      posted = true;
+    }
+  }
+
+  const reply = posted
+    ? { content: `✅ **Application submitted!** (${app.id})\nStaff will review it and interview you in a voice channel. Keep an eye on your DMs.`, ephemeral: true }
+    : { content: '❌ Could not post your application — try again later.', ephemeral: true };
+  return interaction.reply(reply);
+}
+
+async function handleApplyStaffButton(interaction) {
+  if (!isStaff(interaction.member)) {
+    return interaction.reply({ content: '❌ Only staff can use these buttons!', ephemeral: true });
+  }
+  const parts = interaction.customId.replace('app_', '').split('_');
+  const action = parts[0];
+  const id = parts.slice(1).join('_');
+  const app = applyApps.get(id);
+  if (!app) return interaction.reply({ content: '❌ Application not found. (Restarts clear the in-memory store.)', ephemeral: true });
+
+  const member = await interaction.guild.members.fetch(app.userId).catch(() => null);
+
+  if (action === 'wait' || action === 'checkervc' || action === 'staffvc') {
+    const vcName = action === 'wait' ? '⏳ Waiting for Apply' : action === 'checkervc' ? '🛡️ Checker Role' : '👥 Staff Role';
+    let vc = interaction.guild.channels.cache.find(c => c.type === ChannelType.GuildVoice && c.name === vcName);
+    if (!vc) {
+      const cat = interaction.guild.channels.cache.get(settingsStore.loadSettings().applyCategoryId || APPLY_CATEGORY_ID);
+      vc = cat ? cat.children.cache.find(c => c.type === ChannelType.GuildVoice && c.name === vcName) : null;
+    }
+    if (!vc) return interaction.reply({ content: '⚠️ Voice channel not found.', ephemeral: true });
+    if (!member || !member.voice || !member.voice.channel) {
+      return interaction.reply({ content: `ℹ️ <@${app.userId}> is not in any voice channel. Ask them to join one first, or mention them.`, ephemeral: true });
+    }
+    await member.voice.setChannel(vc.id).catch(() => {});
+    return interaction.reply({ content: `🎙️ Moved <@${app.userId}> to **${vcName}**.`, ephemeral: true });
+  }
+
+  if (action === 'accept') {
+    const role = await getApplyRole(interaction.guild, app.roleType);
+    if (!role) {
+      return interaction.reply({ content: '❌ No role found to grant for **' + APPLY_TYPE_LABEL[app.roleType] + '**. Assign `&setrole ' + app.roleType + ' <role>`.' });
+    }
+    if (member) {
+      await member.roles.add(role).catch(() => {});
+    }
+    app.status = 'accepted';
+    app.decidedBy = interaction.user.id;
+    await renderApplyMessage(interaction.guild, app);
+    try {
+      const dm = await interaction.user.client.users.fetch(app.userId).catch(() => null);
+      if (dm) await dm.send(`🎉 **Congratulations!** Your **${APPLY_TYPE_LABEL[app.roleType]}** application (${app.id}) was **accepted**! You now have the <@&${role.id}> role.`);
+    } catch { /* ignore */ }
+    return interaction.reply({ content: `✅ **${app.id}** accepted — <@${app.userId}> got <@&${role.id}>.`, ephemeral: true });
+  }
+
+  if (action === 'decline') {
+    app.status = 'declined';
+    app.decidedBy = interaction.user.id;
+    await renderApplyMessage(interaction.guild, app);
+    try {
+      const dm = await interaction.user.client.users.fetch(app.userId).catch(() => null);
+      if (dm) await dm.send(`❌ **Application ${app.id}** was declined. You can try again later.`);
+    } catch { /* ignore */ }
+    return interaction.reply({ content: `❌ **${app.id}** declined.`, ephemeral: true });
+  }
+
+  return interaction.reply({ content: '⚠️ Unknown apply action.', ephemeral: true });
+}
+
+async function renderApplyMessage(guild, app) {
+  const ch = guild.channels.cache.get(app.channelId || settingsStore.loadSettings().applyQueueChannelId);
+  if (!ch) return;
+  const msg = await ch.messages.fetch(app.messageId).catch(() => null);
+  if (!msg) return;
+  await msg.edit({
+    embeds: [buildApplyEmbed(guild, app)],
+    components: app.status === 'pending' ? buildApplyButtons(app.id) : []
+  }).catch(() => {});
+}
+
 async function handleBuy(interaction, itemId) {
   const item = storeModule.getItems().find(i => i.id === String(itemId).trim());
   if (!item) {
@@ -1572,6 +1869,7 @@ client.once(Events.ClientReady, async (c) => {
   postCommandsInfoWithRetry();
   for (const g of c.guilds.cache.values()) {
     ensureCheaterChannels(g).catch(() => {});
+    ensureApplyChannels(g).catch(() => {});
   }
   const guild = c.guilds.cache.first();
   const ranked = computeCombinedRanking();
@@ -1951,6 +2249,18 @@ async function performJoin(interaction, match, team) {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+  if (interaction.isButton() && interaction.customId === 'apply_start_checker') {
+    return handleApplyStart(interaction, 'checker');
+  }
+  if (interaction.isButton() && interaction.customId === 'apply_start_staff') {
+    return handleApplyStart(interaction, 'staff');
+  }
+  if (interaction.isButton() && interaction.customId.startsWith('app_')) {
+    return handleApplyStaffButton(interaction);
+  }
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('applymodal_')) {
+    return handleApplyModal(interaction);
+  }
   if (interaction.isButton() && interaction.customId === 'report_player') {
     return handleReportStart(interaction);
   }
@@ -2798,8 +3108,8 @@ client.on(Events.MessageCreate, async (message) => {
     }
     const args = message.content.trim().split(/\s+/);
     const key = (args[1] || '').toLowerCase();
-    if (!['checker', 'cheatermark'].includes(key)) {
-      return message.reply('Usage: `&setrole <checker|cheatermark> <roleId|@role>`');
+    if (!['checker', 'cheatermark', 'staff'].includes(key)) {
+      return message.reply('Usage: `&setrole <checker|cheatermark|staff> <roleId|@role>`');
     }
     const roleMention = message.mentions.roles.first();
     const roleInput = args[2] || '';
@@ -2815,14 +3125,17 @@ client.on(Events.MessageCreate, async (message) => {
       if (!list.includes(roleId)) list.push(roleId);
       S.checkerRoleIds = list;
       S.checkerRoleId = list[0];
+    } else if (key === 'staff') {
+      S.applyStaffRoleId = roleId;
     } else {
       S.cheaterMarkRoleId = roleId;
     }
     settingsStore.saveSettings(S);
     await message.reply(`✅ **${key}** role set to <@&${roleId}>.`);
-    if (key === 'checker') {
+    if (key === 'checker' || key === 'staff') {
       for (const g of message.client.guilds.cache.values()) {
         ensureCheaterChannels(g).catch(() => {});
+        ensureApplyChannels(g).catch(() => {});
       }
     }
   } else if (content.startsWith('&jail')) {

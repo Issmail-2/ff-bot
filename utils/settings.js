@@ -12,7 +12,12 @@ const DEFAULTS = {
   exposeChannelId: null,
   reportCost: 50,
   reportReward: 100,
-  exposeCategoryId: null
+  exposeCategoryId: null,
+  applyCategoryId: null,
+  applyChannelId: null,
+  applyQueueChannelId: null,
+  applyCheckerRoleId: null,
+  applyStaffRoleId: null
 };
 
 function ensureFile() {
