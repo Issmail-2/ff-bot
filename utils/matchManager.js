@@ -20,6 +20,10 @@ const suppressedUsers = new Set();
 const VOICE_POOL_SIZE = parseInt(process.env.VOICE_POOL_SIZE || '0') || (config.voicePoolSize || 5);
 const voicePool = new Map();
 
+function isRealId(id) {
+  return typeof id === 'string' && /^\d{15,20}$/.test(id);
+}
+
 function ensureLogsFile() {
   const dir = path.dirname(LOGS_FILE);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -401,6 +405,7 @@ async function activatePoolChannels(guild, match, team1Channel, team2Channel) {
       { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
     ];
     for (const uid of teamIds) {
+      if (!isRealId(uid)) continue;
       overwrites.push({ id: uid, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
     }
     if (botMember) {
@@ -450,6 +455,7 @@ async function createVoiceChannels(guild, match) {
     { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
   ];
   for (const userId of match.team1) {
+    if (!isRealId(userId)) continue;
     team1Overwrites.push({ id: userId, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
   }
   if (botMember) {
@@ -460,6 +466,7 @@ async function createVoiceChannels(guild, match) {
     { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
   ];
   for (const userId of match.team2) {
+    if (!isRealId(userId)) continue;
     team2Overwrites.push({ id: userId, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
   }
   if (botMember) {
@@ -495,6 +502,7 @@ async function createChannel(guild, match) {
   ];
   const allPlayers = [...new Set([...match.team1, ...match.team2])];
   for (const userId of allPlayers) {
+    if (!isRealId(userId)) continue;
     overwrites.push({
       id: userId,
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory],

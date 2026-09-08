@@ -18,6 +18,10 @@ function progressBar(current, total, size = 8) {
   return `${'█'.repeat(filled)}${'░'.repeat(size - filled)}`;
 }
 
+function divider(char = '═', length = 26) {
+  return char.repeat(length);
+}
+
 function createEmbed(color) {
   return new EmbedBuilder()
     .setColor(color)
@@ -25,4 +29,4 @@ function createEmbed(color) {
     .setTimestamp();
 }
 
-module.exports = { COLORS, BRANDING, progressBar, createEmbed };
+module.exports = { COLORS, BRANDING, progressBar, divider, createEmbed };
