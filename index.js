@@ -607,6 +607,7 @@ async function updateMatchChannel(guild, match) {
 }
 
 async function cancelMatch(guild, match, cancelText) {
+  await manager.returnPlayersToOriginal(guild, match).catch(() => {});
   await manager.deleteVoiceChannels(guild, match).catch(() => {});
   await manager.deleteChannel(guild, match).catch(() => {});
   if (match.joinTimeout) { clearTimeout(match.joinTimeout); match.joinTimeout = null; }
