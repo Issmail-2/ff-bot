@@ -916,6 +916,71 @@ async function syncStoreEmbed(guild, channelOverride) {
   console.log(`[STORE] store embed synced in ${channel.id}`);
 }
 
+const LIVE_LB_CHANNEL_ID = '1545413924483113040';
+
+function buildCombinedLeaderboardEmbed() {
+  const ranked = computeCombinedRanking();
+  const losses = {};
+  for (const mode of ['amo', 'esport']) {
+    try {
+      const data = storage.loadPoints(mode);
+      if (data && data.players) {
+        for (const [uid, p] of Object.entries(data.players)) {
+          losses[uid] = (losses[uid] || 0) + (p.losses || 0);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  const ts = Math.floor(Date.now() / 1000);
+
+  const embed = new EmbedBuilder()
+    .setTitle('🏆 COMBINED LEADERBOARD')
+    .setColor(COLORS.gold);
+
+  if (!ranked.length) {
+    embed.setDescription('No matches played yet.');
+    embed.setFooter({ text: `Updated <t:${ts}:R> • ${BRANDING}` });
+    return embed;
+  }
+
+  const podium = ranked.slice(0, 3).map(([id, p], i) => {
+    const medal = ['🥇', '🥈', '🥉'][i];
+    return `${medal} <@${id}> — **${p.totalPoints} pts**  (${p.wins}W / ${losses[id] || 0}L)`;
+  }).join('\n');
+  const rest = ranked.slice(3, 10).map(([id, p], i) => {
+    return `**#${i + 4}** <@${id}> — ${p.totalPoints} pts  (${p.wins}W / ${losses[id] || 0}L)`;
+  }).join('\n');
+
+  embed.setDescription(`\`\`\`${divider('═')}\`\`\`\n${podium}`);
+  if (rest) embed.addFields({ name: `─────────────`, value: rest });
+  embed.setFooter({ text: `${ranked.length} ranked • Updated <t:${ts}:R> • ${BRANDING}` });
+  return embed;
+}
+
+async function syncCombinedLeaderboard(guild) {
+  if (!guild) return;
+  const channel = guild.channels.cache.get(LIVE_LB_CHANNEL_ID);
+  if (!channel) return;
+  try {
+    const msgs = await channel.messages.fetch({ limit: 30 });
+    for (const m of msgs.values()) {
+      if (m.author.id === client.user.id && m.embeds && m.embeds[0] && String(m.embeds[0].title || '').includes('COMBINED LEADERBOARD')) {
+        await m.delete().catch(() => {});
+      }
+    }
+  } catch (e) {
+    console.log('[LB] cleanup failed:', e.message);
+  }
+  const embed = buildCombinedLeaderboardEmbed();
+  await channel.send({ embeds: [embed] }).catch(e => console.log('[LB] send failed:', e.message));
+  console.log(`[LB] combined leaderboard synced in ${channel.id}`);
+}
+
+function refreshCombinedLeaderboard(guild) {
+  if (!guild) return;
+  syncCombinedLeaderboard(guild).catch(() => {});
+}
+
 async function handleBuy(interaction, itemId) {
   const item = storeModule.getItems().find(i => i.id === String(itemId).trim());
   if (!item) {
@@ -978,6 +1043,7 @@ async function handleBuy(interaction, itemId) {
   }
 
   if (syncStoreEmbed) syncStoreEmbed(interaction.guild).catch(() => {});
+  refreshCombinedLeaderboard(interaction.guild);
   const suffix = item.type === 'role' ? `Role <@&${item.roleId}> granted.` : `Staff has been notified to deliver your diamonds 💎.`;
   return interaction.reply({ content: `✅ Purchased **${item.name}**! Spent **${item.cost} pts** from your balance. ${suffix}`, ephemeral: true });
 }
@@ -1031,6 +1097,7 @@ client.once(Events.ClientReady, async (c) => {
       }
     }
     syncStoreEmbed(g).catch(e => console.log('[STORE] ready sync failed:', e.message));
+    refreshCombinedLeaderboard(g);
   }
 
   if (guild && manager.getVoicePoolSize && manager.getVoicePoolSize() > 0) {
@@ -1332,6 +1399,7 @@ async function settleMatchResult(guild, match) {
 
   await manager.finishMatch(guild, match);
   applyRankNicknames(guild).catch(() => {});
+  refreshCombinedLeaderboard(guild);
 }
 
 async function timeoutMatch(guild, matchId, phase = 'lobby') {
@@ -1908,6 +1976,7 @@ const adminCommands = {
     for (const mode of ['amo', 'esport']) storage.resetAllPoints(mode);
     await message.reply('🔄 **All points have been reset for all modes!** Rank nicknames cleared.');
     stripRankNicknames(message.guild).catch(() => {});
+    refreshCombinedLeaderboard(message.guild);
   },
   setpoints: async (message, mode = 'amo') => {
     if (!canAddPoints(message.member)) {
@@ -1926,6 +1995,7 @@ const adminCommands = {
     const result = storage.addPoints(user.id, points, type, mode);
     await message.reply(`✅ Added **${points}** points to <@${user.id}>. Total: **${result.totalPoints}**`);
     applyRankNicknames(message.guild).catch(() => {});
+    refreshCombinedLeaderboard(message.guild);
   }
 };
 
@@ -1995,6 +2065,7 @@ client.on(Events.MessageCreate, async (message) => {
     const mode = getModeByChannel(message.channel.id);
     const total = storage.adjustPoints(userId, -points, mode);
     applyRankNicknames(message.guild).catch(() => {});
+    refreshCombinedLeaderboard(message.guild);
     return message.reply(`❌ Removed **${points} pts** from <@${userId}> (${mode}). New total: **${total} pts**.`);
   }
 
@@ -2225,6 +2296,7 @@ client.on(Events.MessageCreate, async (message) => {
     match.winnerId = null;
     match.loserId = null;
     manager.persistMatches();
+    refreshCombinedLeaderboard(message.guild);
 
     if (refunded.length === 0) {
       await message.reply('✅ Votes were already clear. Re-vote with `!w @player` / `!l @player`.');
@@ -2260,6 +2332,7 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     await cancelMatch(message.guild, match, `🛑 **Match force-ended by staff** (<@${message.author.id}>)`);
+    refreshCombinedLeaderboard(message.guild);
 
     await message.reply(
       `🛑 **Match force-ended.** No points were awarded.` +
@@ -2368,6 +2441,7 @@ client.on(Events.MessageCreate, async (message) => {
 
       await manager.finishMatch(message.guild, doneMatch);
       applyRankNicknames(message.guild).catch(() => {});
+      refreshCombinedLeaderboard(message.guild);
     } else {
       const pending = isWin ? '💪 **!l** loser' : '🏆 **!w** winner';
       await message.channel.send({ content: `⏳ Waiting for the ${pending} vote before finishing the match.`, }).catch(() => {});
@@ -2400,6 +2474,7 @@ client.on(Events.GuildMemberAdd, async (member) => {
   const points = config.inviteBonus || 10;
   storage.adjustPoints(usedInvite.inviterId, points, 'amo');
   console.log(`[INVITE] ${member.id} joined via invite of ${usedInvite.inviterId}; +${points} pts`);
+  refreshCombinedLeaderboard(guild);
   const inviter = guild.members.cache.get(usedInvite.inviterId);
   if (inviter) {
     inviter.send(`🎉 **New member via your invite!**\n<@${member.id}> joined your server using your invite link. You earned **${points} points**!`).catch(() => {});
