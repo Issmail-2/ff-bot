@@ -21,6 +21,9 @@ if (!config.setResultRoles) {
 if (!config.matchPingRoles) {
   config.matchPingRoles = process.env.MATCH_PING_ROLE_IDS ? process.env.MATCH_PING_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1450458684428783616', '1546807156970487838', '1466082863115145441', '1459133371874807921'];
 }
+if (!config.matchViewerRoles) {
+  config.matchViewerRoles = process.env.MATCH_VIEWER_ROLE_IDS ? process.env.MATCH_VIEWER_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1466082863115145441'];
+}
 if (!config.inviteBonus) config.inviteBonus = parseInt(process.env.INVITE_BONUS_POINTS) || 10;
 if (!config.voiceCategoryId) config.voiceCategoryId = config.modes.amo.voiceCategoryId;
 if (!config.requiredVoiceChannels) {
@@ -2619,8 +2622,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
       }
       const captains = [match.team1[0], match.team2[0]].filter(Boolean);
-      if (!captains.includes(interaction.user.id)) {
-        return interaction.reply({ content: '❌ Only the **first player of each team** can vote!', ephemeral: true });
+      const isVoteStaff = (config.matchViewerRoles || []).some(rid => rid && interaction.member.roles.cache.has(rid));
+      if (!captains.includes(interaction.user.id) && !isVoteStaff) {
+        return interaction.reply({ content: '❌ Only the **first player of each team** (or match staff) can vote!', ephemeral: true });
       }
       if (match.winnerVoteSet && match.loserVoteSet) {
         return interaction.reply({ content: '✅ MVP votes were already finalized.', ephemeral: true });
