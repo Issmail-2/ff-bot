@@ -571,22 +571,22 @@ function teamPanel(ids, matchMode, size, guild) {
 }
 
 function buildMatchBoxEmbed(guild, match, creatorUser) {
-  const progress1 = `${match.team1.length}/${match.teamSize}`;
-  const progress2 = `${match.team2.length}/${match.teamSize}`;
-  const bar1 = progressBar(match.team1.length, match.teamSize, 8);
-  const bar2 = progressBar(match.team2.length, match.teamSize, 8);
-  const display = getModeConfig(match.mode).displayName;
-  const ready = manager.isTeamsFull(match.id);
+  const list = (ids) => {
+    if (!ids || ids.length === 0) return '`Empty`';
+    return ids.map(id => `<@${id}>`).join('\n');
+  };
+  const t1 = list(match.team1);
+  const t2 = list(match.team2);
 
   const embed = new EmbedBuilder()
-    .setTitle(`${config.emojis.game} ${display.toUpperCase()} • ${match.teamSize}v${match.teamSize}`)
-    .setColor(ready ? COLORS.gold : COLORS.primary)
-    .setDescription(`**Hosted by** <@${match.creatorId}>`)
+    .setTitle(`🎮 Free Fire ${match.teamSize}v${match.teamSize} Match`)
+    .setColor(COLORS.dark)
+    .setDescription(`Match started by <@${match.creatorId}>\n---`)
     .addFields(
-      { name: `${config.emojis.team1} TEAM 1 — \`${progress1}\``, value: `\`\`\`${bar1}\`\`\`\n${teamPanel(match.team1, match.mode || 'amo', match.teamSize, guild)}`, inline: true },
-      { name: `${config.emojis.team2} TEAM 2 — \`${progress2}\``, value: `\`\`\`${bar2}\`\`\`\n${teamPanel(match.team2, match.mode || 'amo', match.teamSize, guild)}`, inline: true }
+      { name: `🔴 Team 1 (${match.team1.length}/${match.teamSize})`, value: `---\n${t1}` },
+      { name: `🟢 Team 2 (${match.team2.length}/${match.teamSize})`, value: `---\n${t2}` }
     )
-    .setFooter({ text: `${BRANDING} • lock your slot with the buttons below` });
+    .setFooter({ text: BRANDING });
 
   return embed;
 }
@@ -829,35 +829,32 @@ async function startFullMatch(guild, match) {
 function buildMatchButtons(match, userId) {
   const joinTeam1 = new ButtonBuilder()
     .setCustomId(`join1_${match.id}`)
-    .setEmoji('🟢')
     .setLabel('Join Team 1')
-    .setStyle(ButtonStyle.Success);
+    .setStyle(ButtonStyle.Danger);
 
   const joinTeam2 = new ButtonBuilder()
     .setCustomId(`join2_${match.id}`)
-    .setEmoji('🔴')
     .setLabel('Join Team 2')
-    .setStyle(ButtonStyle.Danger);
+    .setStyle(ButtonStyle.Success);
 
   const leave = new ButtonBuilder()
     .setCustomId(`leave_${match.id}`)
-    .setEmoji('🚪')
     .setLabel('Leave')
     .setStyle(ButtonStyle.Secondary);
 
   const cancel = new ButtonBuilder()
     .setCustomId(`cancel_${match.id}`)
-    .setEmoji('❌')
     .setLabel('Cancel Game')
     .setStyle(ButtonStyle.Danger);
 
-  const list = [joinTeam1, joinTeam2, leave];
+  const buttons = [joinTeam1, joinTeam2, leave];
 
   if (match.status === 'waiting') {
-    list.push(cancel);
+    buttons.push(cancel);
   }
 
-  return list.map(b => new ActionRowBuilder().addComponents(b));
+  const row = new ActionRowBuilder().addComponents(buttons);
+  return [row];
 }
 
 async function ensureStoreChannel(guild) {
@@ -1973,14 +1970,12 @@ client.on(Events.MessageCreate, async (message) => {
     const match = manager.createMatch(message.author.id, teamSize, message.channel.id, mode);
 
     const setupEmbed = new EmbedBuilder()
-      .setTitle(`${config.emojis.game} ${modeCfg.displayName} • ${teamSize}v${teamSize}`)
+      .setTitle(`🎮 Free Fire ${teamSize}v${teamSize} Match`)
       .setDescription(
-        `<@${message.author.id}> is hosting a **${modeCfg.displayName} ${teamSize}v${teamSize}** match!\n` +
-        `**1)** Press **⚙️ Set Room Config** to enter your room details\n` +
-        `**2)** Share the room with your team\n` +
-        `**3)** Players lock their slot with the buttons below`
+        `Match started by <@${message.author.id}>\n---\n` +
+        `Press **Set Room Config** to enter your room details, then share the room ID with your team.`
       )
-      .setColor(COLORS.primary)
+      .setColor(COLORS.dark)
       .setFooter({ text: BRANDING });
 
     const setupButton = new ActionRowBuilder().addComponents(
