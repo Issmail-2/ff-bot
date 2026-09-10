@@ -322,7 +322,8 @@ Refresh: \`&refreshstore\`
 \`&unjail <userID>\` - release a jailed player
 
 ⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\`
-💠 Store: \`role\` items auto-grant the role instantly, \`gems\`/diamonds deduct points immediately and staff delivers them.`;
+💠 Store: \`role\` items auto-grant the role instantly, \`gems\`/diamonds deduct points immediately and staff delivers them.
+🔀 All commands work with \`!\` or \`&\` (e.g. \`!resetpoints\` / \`&resetpoints\`) - except \`!play\` and \`!esport\` which use \`!\` only.`;
 
 function buildInfoEmbeds() {
   const MAX = 4000;
@@ -2003,7 +2004,7 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (lowercase.startsWith('!forcefull')) {
+  if (lowercase.startsWith('!forcefull') || lowercase.startsWith('&forcefull')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors can use this!');
     }
@@ -2845,10 +2846,10 @@ client.on(Events.MessageCreate, async (message) => {
   try {
   if (message.author.bot) return;
 
-  const content = message.content.trim().toLowerCase();
+  const content = message.content.trim().toLowerCase().replace(/^&/, '!');
   const mode = getModeByChannel(message.channel.id);
 
-  if (content.startsWith('&clear')) {
+  if (content.startsWith('!clear')) {
     const target = message.member;
     if (!hasCommandAccess(target)) {
       return message.reply('❌ Only supervisors/admins can use this!');
@@ -2875,7 +2876,7 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (content === '&store') {
+  if (content === '!store') {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can refresh the store!');
     }
@@ -2883,7 +2884,7 @@ client.on(Events.MessageCreate, async (message) => {
     await syncStoreEmbed(message.guild, message.channel);
     return;
   }
-  if (content === '&refreshstore') {
+  if (content === '!refreshstore') {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can refresh the store!');
     }
@@ -2891,7 +2892,7 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply(`✅ Store updated here (<#${message.channel.id}>) - old message replaced.`);
   }
 
-  if (content.startsWith('&remove')) {
+  if (content.startsWith('!remove')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can remove points!');
     }
@@ -2911,7 +2912,7 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply(`❌ Removed **${points} pts** from <@${userId}> (${mode}). New total: **${total} pts**.`);
   }
 
-  if (content.startsWith('&storeadd')) {
+  if (content.startsWith('!storeadd')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can add store items!');
     }
@@ -2940,18 +2941,18 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply(`✅ Store item added: **${item.name}** (${item.cost} pts, ${item.type}${item.roleId ? ` - <@&${item.roleId}>` : ''}${item.stock !== null ? `, **${item.stock}** in stock` : ''}). ID: \`${item.id}\`. The store was updated.`);
   }
 
-  if (content.startsWith('&storeremove')) {
+  if (content.startsWith('!storeremove')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can remove store items!');
     }
-    const id = content.replace('&storeremove', '').trim();
-    if (!id) return message.reply('Usage: `&storeremove <itemId>`');
+    const id = content.replace('!storeremove', '').trim();
+    if (!id) return message.reply('Usage: `&storeremove <itemId>` (or `!storeremove`)');
     const ok = storeModule.removeItem(id);
     if (ok) await syncStoreEmbed(message.guild);
     return message.reply(ok ? `🚮 Store item \`${id}\` removed. The store was updated.` : '❌ Item not found.');
   }
 
-  if (content === '&commands') {
+  if (content === '!commands') {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can post the commands list!');
     }
@@ -2961,7 +2962,7 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply(`ℹ️ Commands list already exists in <#${target.id}>.`);
   }
 
-  if (content.startsWith('&announce')) {
+  if (content.startsWith('!announce')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can announce!');
     }
@@ -2975,7 +2976,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!target) {
       return message.reply(`❌ Channel <#${channelId}> not found in this server.`);
     }
-    const text = raw.replace(/^&announce\s+/i, '').replace(channelId, '').trim();
+    const text = raw.replace(/^[!&]announce\s+/i, '').replace(channelId, '').trim();
     const sent = await target.send(text).catch((e) => {
       message.reply(`❌ Could not send: ${e.message}`);
       return null;
@@ -2986,7 +2987,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   if (content === '!balance' || content === '!bal') {
     let targetId = message.author.id;
-    const rest = message.content.replace(/!balance|!bal/i, '').trim();
+    const rest = content.replace(/!balance|!bal/, '').trim();
     const mention = message.mentions.users.first();
     if (rest) {
       const m = rest.match(/\d{15,20}/);
@@ -3013,7 +3014,7 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply({ embeds: [embed] });
   } else if (content === '!stats' || content.startsWith('!stats ')) {
     let targetId = message.author.id;
-    const rest = message.content.replace(/^!stats\s*/i, '').trim();
+    const rest = content.replace(/^!stats\s*/, '').trim();
     const mention = message.mentions.users.first();
     if (rest) {
       const m = rest.match(/\d{15,20}/);
@@ -3070,7 +3071,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!existing) return message.reply('❌ No active match found for that user.');
     await cancelMatch(message.guild, existing, `❌ **Match cancelled by admin** (<@${message.author.id}>)`);
     await message.reply(`❌ **Match cancelled by admin!** <@${target.id}>'s match has been cancelled.`);
-  } else if (content.startsWith('&blacklist')) {
+  } else if (content.startsWith('!blacklist')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can blacklist users!');
     }
@@ -3092,7 +3093,7 @@ client.on(Events.MessageCreate, async (message) => {
     const entry = blacklistModule.blacklistUser(userId, durationMs === -1 ? null : durationMs, reason, message.author.id);
     const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
     await message.reply(`✅ <@${userId}> has been blacklisted!\n📋 Reason: ${reason}\n⏳ Expires: ${expiry}`);
-  } else if (content.startsWith('&unblacklist')) {
+  } else if (content.startsWith('!unblacklist')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can unblacklist users!');
     }
@@ -3108,7 +3109,7 @@ client.on(Events.MessageCreate, async (message) => {
     }
     const removed = blacklistModule.unblacklistUser(userId);
     await message.reply(removed ? `✅ <@${userId}> removed from the blacklist.` : 'ℹ️ That user is not blacklisted.');
-  } else if (content.startsWith('&setrole')) {
+  } else if (content.startsWith('!setrole')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can set roles!');
     }
@@ -3144,7 +3145,7 @@ client.on(Events.MessageCreate, async (message) => {
         ensureApplyChannels(g).catch(() => {});
       }
     }
-  } else if (content.startsWith('&jail')) {
+  } else if (content.startsWith('!jail')) {
     if (!canUseJail(message.member)) {
       return message.reply('❌ Only admins can jail players!');
     }
@@ -3167,7 +3168,7 @@ client.on(Events.MessageCreate, async (message) => {
     const entry = jailModule.jailUser(userId, res.role.id, message.guild.id, durationMs === -1 ? null : durationMs, reason, message.author.id, res.affected, res.removedRoles);
     const expiry = entry.expiresAt === -1 ? '**Permanent**' : `<t:${Math.floor(entry.expiresAt / 1000)}:R>`;
     await message.reply(`⛓️ <@${userId}> has been jailed!${res.removedRoles && res.removedRoles.length ? `\n🗂️ Removed **${res.removedRoles.length}** role(s) (restored on release).` : ''}\n📋 Reason: ${reason}\n⏳ Release: ${expiry}`);
-  } else if (content.startsWith('&unjail')) {
+  } else if (content.startsWith('!unjail')) {
     if (!canUseJail(message.member)) {
       return message.reply('❌ Only admins can unjail players!');
     }
