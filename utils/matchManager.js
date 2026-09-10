@@ -538,7 +538,7 @@ async function createChannel(guild, match) {
     if (!roleId) continue;
     overwrites.push({
       id: roleId,
-      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory],
     });
   }
   if (botMember) {
