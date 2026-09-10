@@ -578,23 +578,13 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const t1 = list(match.team1);
   const t2 = list(match.team2);
 
-  const buttonBox = '```\n' + [
-    '┌──────────────────────────┐',
-    '│  🔴 Join Team 1           │',
-    '│  🟢 Join Team 2           │',
-    '│  ⚪ Leave                 │',
-    '│  ❌ Cancel Game           │',
-    '└──────────────────────────┘'
-  ].join('\n') + '\n```';
-
   const embed = new EmbedBuilder()
     .setTitle(`🎮 Free Fire ${match.teamSize}v${match.teamSize} Match`)
     .setColor(COLORS.dark)
     .setDescription(`Match started by <@${match.creatorId}>\n---`)
     .addFields(
       { name: `🔴 Team 1 (${match.team1.length}/${match.teamSize})`, value: `---\n${t1}` },
-      { name: `🟢 Team 2 (${match.team2.length}/${match.teamSize})`, value: `---\n${t2}` },
-      { name: '⚙️ GAME BUTTONS', value: buttonBox }
+      { name: `🟢 Team 2 (${match.team2.length}/${match.teamSize})`, value: `---\n${t2}` }
     )
     .setFooter({ text: BRANDING });
 
