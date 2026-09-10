@@ -840,18 +840,14 @@ function buildMatchButtons(match, userId) {
     .setLabel('Join Team 2')
     .setStyle(ButtonStyle.Success);
 
-  const isCreator = match.creatorId === userId;
-
   const buttons = [joinTeam1, joinTeam2];
 
-  if (!isCreator) {
-    buttons.push(
-      new ButtonBuilder()
-        .setCustomId(`leave_${match.id}`)
-        .setLabel('Leave')
-        .setStyle(ButtonStyle.Secondary)
-    );
-  }
+  buttons.push(
+    new ButtonBuilder()
+      .setCustomId(`leave_${match.id}`)
+      .setLabel('Leave')
+      .setStyle(ButtonStyle.Secondary)
+  );
 
   if (match.status === 'waiting') {
     buttons.push(
@@ -2695,8 +2691,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return interaction.reply({ content: '❌ The match has started! You can only leave by using **Cancel Match** or an admin action.', ephemeral: true });
       }
       if (match.creatorId === interaction.user.id) {
-        await cancelMatch(interaction.guild, match, `❌ **Match cancelled — the host left** (<@${interaction.user.id}>)`);
-        return interaction.reply({ content: '❌ You left the match. The room has been cancelled.', ephemeral: true });
+        return interaction.reply({ content: '❌ The match host cannot leave! Use **Cancel Game** to close the room.', ephemeral: true });
       }
       const result = manager.leaveMatch(matchId, interaction.user.id);
       if (!result.success) {
