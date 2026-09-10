@@ -70,6 +70,9 @@ const { COLORS, BRANDING, progressBar } = require('./utils/ui');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
+const REPORT_CHANNEL_ID = process.env.REPORT_CHANNEL_ID || '1546846855676043264';
+const CHECK_CHANNEL_ID = process.env.CHECK_CHANNEL_ID || '1546846854556286976';
+const EXPOSE_CHANNEL_ID = process.env.EXPOSE_CHANNEL_ID || '1518059555622228038';
 const APPLY_CATEGORY_ID = process.env.APPLY_CATEGORY_ID || '1476278897107538023';
 const REPORT_COST = parseInt(process.env.REPORT_COST || '', 10) || 50;
 const REPORT_REWARD = parseInt(process.env.REPORT_REWARD || '', 10) || 100;
@@ -1001,6 +1004,7 @@ function refreshCombinedLeaderboard(guild) {
 }
 
 const reportDrafts = new Map();
+const cheatProofPending = new Map();
 const REPORT_PLATFORM_ICON = { PC: '🖥️', Android: '🤖', iOS: '🍎' };
 const DEFAULT_CHECKER_ROLE_IDS = ['1537301155955216394', '1537811347813695488', '1537224612763537418'];
 
@@ -1086,7 +1090,8 @@ async function ensureCheaterChannels(guild) {
 
   const checkerRoleIds = getCheckerRoleIds();
 
-  let checkChannel = guild.channels.cache.get(S.checkChannelId)
+  let checkChannel = guild.channels.cache.get(CHECK_CHANNEL_ID)
+    || guild.channels.cache.get(S.checkChannelId)
     || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'cheater-reports');
   if (!checkChannel) {
     try {
@@ -1110,7 +1115,8 @@ async function ensureCheaterChannels(guild) {
     settingsStore.saveSettings(S);
   }
 
-  let reportChannel = guild.channels.cache.get(S.reportChannelId)
+  let reportChannel = guild.channels.cache.get(REPORT_CHANNEL_ID)
+    || guild.channels.cache.get(S.reportChannelId)
     || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'report-player');
   if (!reportChannel) {
     try {
@@ -1138,7 +1144,8 @@ async function ensureCheaterChannels(guild) {
     await ensureReportButtonMessage(guild, reportChannel);
   }
 
-  let exposeChannel = guild.channels.cache.get(S.exposeChannelId)
+  let exposeChannel = guild.channels.cache.get(EXPOSE_CHANNEL_ID)
+    || guild.channels.cache.get(S.exposeChannelId)
     || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'expose');
   if (!exposeChannel) {
     try {
@@ -1216,7 +1223,7 @@ async function renderReportMessage(guild, report) {
   }).catch(() => {});
 }
 
-async function postExpose(guild, report, checkerId, attachments) {
+async function postExpose(guild, report, checkerId, attachments, cheatType) {
   const S = settingsStore.loadSettings();
   const channel = guild.channels.cache.get(S.exposeChannelId);
   if (!channel) return;
@@ -1227,6 +1234,8 @@ async function postExpose(guild, report, checkerId, attachments) {
     .setDescription(
       `**👤 Cheater**  <@${report.cheaterId || '—'}>  (${cheaterName})\n` +
       `**🆔 Cheater ID**  \`${report.cheaterId || 'unknown'}\`\n` +
+      `**🚫 Type of Cheat**  ${cheatType || 'Unknown'}\n` +
+      `**📸 Proofs**  (see files below)\n` +
       `**🌐 Platform**  ${REPORT_PLATFORM_ICON[report.platform] || '🔘'} ${report.platform}\n` +
       `**🗡️ Reported by**  <@${report.reporterId}>\n` +
       `**🕵️ Checked by**  <@${checkerId}>\n` +
@@ -1234,8 +1243,9 @@ async function postExpose(guild, report, checkerId, attachments) {
       `**🕒 At**  <t:${Math.floor(report.at / 1000)}:f>`
     )
     .setFooter({ text: BRANDING });
+  if (attachments && attachments[0]) embed.setImage(attachments[0]);
   const files = (attachments || []).map(u => ({ attachment: u }));
-  await channel.send({ embeds: [embed], files }).catch(() => {});
+  await channel.send({ embeds: [embed], files }).catch((e) => console.log('[CHEAT] expose send failed:', e.message));
 }
 
 async function applyCheaterAction(guild, report) {
@@ -1406,45 +1416,43 @@ async function handleReportButton(interaction) {
   }
 
   if (action === 'cheat') {
-    cheaterReports.updateReport(id, { status: 'marked', checkedBy: interaction.user.id, claimedBy: interaction.user.id });
-    const updated = cheaterReports.getReport(id);
-    await renderReportMessage(interaction.guild, updated);
+    const cheatModal = new ModalBuilder()
+      .setCustomId(`cheatmodal_${id}`)
+      .setTitle(`🚫 Mark Cheater — ${report.id}`);
 
-    let thread = null;
-    try {
-      thread = await interaction.message.startThread({
-        name: `check-${report.id}`,
-        autoArchiveDuration: 1440,
-        reason: 'Cheater proof collection'
-      });
-    } catch (e) {
-      console.log('[CHEAT] startThread failed:', e.message);
-    }
-    if (!thread) {
-      return interaction.reply({ content: '⚠️ Could not create the proof thread. Try again.', ephemeral: true });
-    }
-    for (const tid of getCheckerRoleIds()) {
-      thread.permissionOverwrites.create(tid, {
-        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
-      }).catch(() => {});
-    }
-    const embed = new EmbedBuilder()
-      .setTitle(`🔍 PROOF COLLECTION — ${report.id}`)
-      .setColor(COLORS.info)
-      .setDescription(
-        `Upload **screenshots / videos** as messages in this thread.\n` +
-        `When everything is attached, press **✅ Done** to post the exposé.\n\n` +
-        `Cheater: ${report.cheaterId ? `<@${report.cheaterId}>` : report.cheaterName}`
-      )
-      .setFooter({ text: BRANDING });
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`rpt_done_${report.id}`).setEmoji('✅').setLabel('Done — Post Exposé').setStyle(ButtonStyle.Success)
-    );
-    await thread.send({ embeds: [embed], components: [row] }).catch(() => {});
-    return interaction.reply({ content: `🔍 Proof collection started in a private thread. Upload the proofs, then press **Done**.`, ephemeral: true });
+    const cheatTypeInput = new TextInputBuilder()
+      .setCustomId('cheatTypeInput')
+      .setLabel('Type of Cheat')
+      .setPlaceholder('e.g. Aimbot, Wallhack, ESP, Speed Hack...')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    cheatModal.addComponents(new ActionRowBuilder().addComponents(cheatTypeInput));
+    return interaction.showModal(cheatModal);
   }
 
   return interaction.reply({ content: '⚠️ Unknown report action.', ephemeral: true });
+}
+
+async function handleCheatModal(interaction) {
+  if (!isChecker(interaction.member)) {
+    return interaction.reply({ content: '❌ Only **checkers** can do this!', ephemeral: true });
+  }
+  const id = interaction.customId.replace('cheatmodal_', '');
+  const report = cheaterReports.getReport(id);
+  if (!report) return interaction.reply({ content: '❌ Report not found.', ephemeral: true });
+
+  const cheatType = interaction.fields.getTextInputValue('cheatTypeInput').trim().slice(0, 80);
+  if (!cheatType) return interaction.reply({ content: '❌ Please fill the **Type of Cheat** field.', ephemeral: true });
+
+  cheaterReports.updateReport(id, { status: 'marked', checkedBy: interaction.user.id, claimedBy: interaction.user.id, cheatType });
+  const updated = cheaterReports.getReport(id);
+  await renderReportMessage(interaction.guild, updated);
+
+  cheatProofPending.set(interaction.user.id, { reportId: id, cheatType });
+  setTimeout(() => { if (cheatProofPending.get(interaction.user.id) && cheatProofPending.get(interaction.user.id).reportId === id) cheatProofPending.delete(interaction.user.id); }, 30 * 60 * 1000);
+
+  return interaction.reply({ content: `🚫 **${report.id}** marked as cheater — type: **${cheatType}**.\n📸 Now **send the proof picture** in this channel. Once received, the exposé will be posted automatically.`, ephemeral: true });
 }
 
 async function handleProofDone(interaction) {
@@ -1467,7 +1475,7 @@ async function handleProofDone(interaction) {
   }
   attachments = attachments.slice(0, 10);
 
-  await postExpose(interaction.guild, report, interaction.user.id, attachments);
+  await postExpose(interaction.guild, report, interaction.user.id, attachments, report.cheatType);
   if (report.cheaterId) {
     await applyCheaterAction(interaction.guild, report);
   } else {
@@ -1478,7 +1486,7 @@ async function handleProofDone(interaction) {
   await renderReportMessage(interaction.guild, updated);
 
   await interaction.reply({ content: `⛔ **Exposé posted** for ${id}${report.cheaterId ? '' : ' — but the reported player had no resolvable ID (no jail/reward applied).'}`, ephemeral: true });
-  try { await thread.setArchived(true).catch(() => {}); } catch { /* ignore */ }
+  try { if (thread && thread.isThread()) await thread.setArchived(true).catch(() => {}); } catch { /* ignore */ }
 }
 
 const applyApps = new Map();
@@ -1937,6 +1945,22 @@ client.on(Events.MessageCreate, async (message) => {
   try {
   if (message.author.bot) return;
 
+  if (cheatProofPending.has(message.author.id) && message.attachments.size > 0) {
+    const pend = cheatProofPending.get(message.author.id);
+    cheatProofPending.delete(message.author.id);
+    const report = cheaterReports.getReport(pend.reportId);
+    if (report) {
+      const urls = [...message.attachments.values()].map(a => a.url).slice(0, 10);
+      await postExpose(message.guild, report, message.author.id, urls, pend.cheatType);
+      if (report.cheaterId) {
+        await applyCheaterAction(message.guild, report);
+      }
+      await renderReportMessage(message.guild, cheaterReports.getReport(pend.reportId));
+      console.log(`[CHEAT] exposé auto-posted for ${pend.reportId} (type: ${pend.cheatType})`);
+    }
+    return;
+  }
+
   const content = message.content.trim();
   const lowercase = content.toLowerCase();
 
@@ -2287,6 +2311,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
   if (interaction.isModalSubmit() && interaction.customId.startsWith('reportmodal_')) {
     return await handleReportModal(interaction);
+  }
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('cheatmodal_')) {
+    return await handleCheatModal(interaction);
   }
   if (interaction.isModalSubmit() && interaction.customId.startsWith('roommodal_')) {
     const matchId = interaction.customId.replace('roommodal_', '');
