@@ -4,7 +4,7 @@ try { config = require('./config.json'); } catch { config = {}; }
 if (process.env.DISCORD_TOKEN) config.token = process.env.DISCORD_TOKEN;
 if (process.env.SUPERVISOR_ROLE_ID) config.supervisorRoleId = process.env.SUPERVISOR_ROLE_ID;
 if (!config.modes) config.modes = {};
-if (!config.modes.amo) config.modes.amo = { name:'amo', displayName:'Custom Room', command:'!play', matchChannelId: process.env.AMO_CHANNEL_ID||'1545315593450954762', voiceCategoryId: process.env.AMO_VOICE_CATEGORY||'1545316338145165332', logsCategoryId: process.env.AMO_LOGS_CATEGORY||'1545364636034138112', pointsFile:'./data/points.json' };
+if (!config.modes.amo) config.modes.amo = { name:'amo', displayName:'Custom Room', command:'!play', matchChannelId: process.env.AMO_CHANNEL_ID||'1545315593450954762', ammoChannelId: process.env.AMMO_CHANNEL_ID||'1547567219167199352', voiceCategoryId: process.env.AMO_VOICE_CATEGORY||'1545316338145165332', logsCategoryId: process.env.AMO_LOGS_CATEGORY||'1545364636034138112', pointsFile:'./data/points.json' };
 if (!config.modes.esport) config.modes.esport = { name:'esport', displayName:'Esport', command:'!esport', matchChannelId: process.env.ESPORT_CHANNEL_ID||'1545388379309482037', voiceCategoryId: process.env.ESPORT_VOICE_CATEGORY||'1545386731686076476', logsCategoryId: process.env.ESPORT_LOGS_CATEGORY||'1545386732982374433', pointsFile:'./data/points_esport.json' };
 if (!config.matchPoints) config.matchPoints = { winner: 80, loser: 30 };
 if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705>', team1:'<a:aHYPR_GREENDOTid:1545351146770796634>', team2:'<a:aredptid:1545350890989428829>' };
@@ -102,6 +102,7 @@ process.on('unhandledRejection', (r) => {
 
 function getModeByChannel(channelId) {
   if (config.modes.esport && config.modes.esport.matchChannelId === channelId) return 'esport';
+  if (config.modes.amo && (config.modes.amo.matchChannelId === channelId || config.modes.amo.ammoChannelId === channelId)) return 'amo';
   return 'amo';
 }
 
@@ -1058,8 +1059,9 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     const matchChannelId = getModeConfig(mode).matchChannelId;
-    if (message.channel.id !== matchChannelId) {
-      return message.reply(`❌ Please use \`${modeCfg.command}\` in the ${modeCfg.displayName} channel <#${matchChannelId}>.`);
+    const ammoChannelId = getModeConfig(mode).ammoChannelId;
+    if (message.channel.id !== matchChannelId && message.channel.id !== ammoChannelId) {
+      return message.reply(`❌ Please use \`${modeCfg.command}\` in the ${modeCfg.displayName} channel <#${matchChannelId}> or <#${ammoChannelId}>.`);
     }
 
     const existing = manager.getMatchByCreator(message.author.id, mode);
