@@ -12,6 +12,9 @@ if (!config.modes.amo.voiceCategoryId) config.modes.amo.voiceCategoryId = '15453
 if (!config.modes.esport.voiceCategoryId) config.modes.esport.voiceCategoryId = '1545386731686076476';
 if (process.env.ROOM_CATEGORY_ID) config.roomCategoryId = process.env.ROOM_CATEGORY_ID;
 if (!config.roomCategoryId) config.roomCategoryId = '1545316338145165332';
+if (!config.matchViewerRoles) {
+  config.matchViewerRoles = process.env.MATCH_VIEWER_ROLE_IDS ? process.env.MATCH_VIEWER_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1466082863115145441'];
+}
 
 const activeMatches = new Map();
 const MATCHES_FILE = path.resolve(__dirname, '..', 'data', 'matches.json');
@@ -409,6 +412,10 @@ async function activatePoolChannels(guild, match, team1Channel, team2Channel) {
     const overwrites = [
       { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
     ];
+    for (const roleId of (config.matchViewerRoles || [])) {
+      if (!roleId) continue;
+      overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel] });
+    }
     for (const uid of teamIds) {
       if (!isRealId(uid)) continue;
       overwrites.push({ id: uid, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
@@ -465,6 +472,10 @@ async function createVoiceChannels(guild, match) {
   const team1Overwrites = [
     { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
   ];
+  for (const roleId of (config.matchViewerRoles || [])) {
+    if (!roleId) continue;
+    team1Overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel] });
+  }
   for (const userId of match.team1) {
     if (!isRealId(userId)) continue;
     team1Overwrites.push({ id: userId, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
@@ -476,6 +487,10 @@ async function createVoiceChannels(guild, match) {
   const team2Overwrites = [
     { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
   ];
+  for (const roleId of (config.matchViewerRoles || [])) {
+    if (!roleId) continue;
+    team2Overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel] });
+  }
   for (const userId of match.team2) {
     if (!isRealId(userId)) continue;
     team2Overwrites.push({ id: userId, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
@@ -517,6 +532,13 @@ async function createChannel(guild, match) {
     overwrites.push({
       id: userId,
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory],
+    });
+  }
+  for (const roleId of (config.matchViewerRoles || [])) {
+    if (!roleId) continue;
+    overwrites.push({
+      id: roleId,
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
     });
   }
   if (botMember) {
