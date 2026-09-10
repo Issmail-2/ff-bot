@@ -550,13 +550,18 @@ async function ensureEsportChannels(guild) {
 }
 
 
-function teamPanel(ids, matchMode, size) {
+function teamPanel(ids, matchMode, size, guild) {
   return Array.from({ length: size || ids.length }, (_, i) => {
     const uid = ids[i];
     if (!uid) return '▫️ ─ *Empty slot*';
     const badge = storage.getRankBadge(uid, matchMode);
     const crown = i === 0 ? '👑' : '▫️';
-    return `${crown} <@${uid}>${badge ? ` \`[${badge}]\`` : ''}`;
+    let name = 'User';
+    if (guild) {
+      const member = guild.members.cache.get(uid);
+      if (member) name = member.displayName || member.user.username;
+    }
+    return `${crown} ${name}${badge ? ` \`[${badge}]\`` : ''}`;
   }).join('\n');
 }
 
@@ -573,8 +578,8 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
     .setColor(ready ? COLORS.gold : COLORS.primary)
     .setDescription(`**Hosted by** <@${match.creatorId}>\n\`\`\`${divider('═')}\`\`\``)
     .addFields(
-      { name: `${config.emojis.team1} TEAM 1 — \`${progress1}\``, value: `\`\`\`${bar1}\`\`\`\n${teamPanel(match.team1, match.mode || 'amo', match.teamSize)}`, inline: true },
-      { name: `${config.emojis.team2} TEAM 2 — \`${progress2}\``, value: `\`\`\`${bar2}\`\`\`\n${teamPanel(match.team2, match.mode || 'amo', match.teamSize)}`, inline: true }
+      { name: `${config.emojis.team1} TEAM 1 — \`${progress1}\``, value: `\`\`\`${bar1}\`\`\`\n${teamPanel(match.team1, match.mode || 'amo', match.teamSize, guild)}`, inline: true },
+      { name: `${config.emojis.team2} TEAM 2 — \`${progress2}\``, value: `\`\`\`${bar2}\`\`\`\n${teamPanel(match.team2, match.mode || 'amo', match.teamSize, guild)}`, inline: true }
     )
     .setFooter({ text: `${BRANDING} • lock your slot with the buttons below` });
 
@@ -584,20 +589,23 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
 async function updateMatchChannel(guild, match) {
   const channel = guild.channels.cache.get(match.channelId2);
   if (!channel) return;
+  const getName = (id) => {
+    const member = guild.members.cache.get(id);
+    return member ? (member.displayName || member.user.username) : 'User';
+  };
   const list1 = match.team1.length > 0 ? match.team1.map(id => {
     const badge = storage.getRankBadge(id, match.mode || 'amo');
-    return badge ? `<@${id}> \`[${badge}]\`` : `<@${id}>`;
+    return badge ? `${getName(id)} \`[${badge}]\`` : getName(id);
   }).join('\n') : 'Empty';
   const list2 = match.team2.length > 0 ? match.team2.map(id => {
     const badge = storage.getRankBadge(id, match.mode || 'amo');
-    return badge ? `<@${id}> \`[${badge}]\`` : `<@${id}>`;
+    return badge ? `${getName(id)} \`[${badge}]\`` : getName(id);
   }).join('\n') : 'Empty';
   const embed = new EmbedBuilder()
     .setTitle(`🏠 ROOM INFO`)
     .setColor(COLORS.primary)
     .setDescription(
       `**▫️ Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
-      `**▫️ Room Name** _(hover to copy)_\n\`\`\`${match.roomName || '—'}\`\`\`\n` +
       `**▫️ Password** _(hover to copy)_\n\`\`\`${match.password || '—'}\`\`\`\n` +
       `**▫️ Match Key** _(hover to copy)_\n\`\`\`${match.key || '—'}\`\`\``
     )
@@ -718,10 +726,10 @@ function mvpPlayerOptions(guild, match, excludeId) {
   });
 }
 
-function buildMainMatchEmbed(match) {
+function buildMainMatchEmbed(match, guild) {
   const display = getModeConfig(match.mode).displayName;
-  const t1Field = teamPanel(match.team1, match.mode || 'amo', match.teamSize) || '*Empty*';
-  const t2Field = teamPanel(match.team2, match.mode || 'amo', match.teamSize) || '*Empty*';
+  const t1Field = teamPanel(match.team1, match.mode || 'amo', match.teamSize, guild) || '*Empty*';
+  const t2Field = teamPanel(match.team2, match.mode || 'amo', match.teamSize, guild) || '*Empty*';
 
   let status = '⏳ **Waiting for captains to vote...**';
   const votes = [];
@@ -730,25 +738,19 @@ function buildMainMatchEmbed(match) {
   if (votes.length) status = votes.join('       ');
   if (match.resultStatus) status = String(match.resultStatus);
 
-  const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ') || '*None configured*';
-  const roomName = match.roomName || match.roomId || '—';
-
   return new EmbedBuilder()
-    .setTitle(`${config.emojis.game} ${display.toUpperCase()} • MATCH LIVE`)
+    .setTitle(`${config.emojis.game} CUSTOM ROOM`)
     .setColor(COLORS.gold)
     .setDescription(
-      `\`\`\`${divider('═')}\`\`\`\n` +
       `🔑 **Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
-      `🖥️ **Room Name** _(hover to copy)_\n\`\`\`${roomName}\`\`\`\n` +
       `🔒 **Password** _(hover to copy)_\n\`\`\`${match.password}\`\`\``
     )
     .addFields(
       { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: t1Field, inline: true },
       { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field, inline: true },
-      { name: '🎛️ ACTIONS', value: `🛡️ **Staff Request**  ▸  call staff to the room\n🗳️ **Vote for MVP**  ▸  captains pick the MVP\n❌ **Cancel Match**  ▸  opens a public cancel vote\n🚫 **Staff Cancel**  ▸  staff closes instantly` },
       { name: '⚡ STATUS', value: status || '—' }
     )
-    .setFooter({ text: `${roleMentions} • ${BRANDING} • Winner MVP 80 | Winner 50 | Loser MVP 30 | Loser 10` });
+    .setFooter({ text: BRANDING });
 }
 
 async function updateResultBox(guild, match) {
@@ -756,7 +758,7 @@ async function updateResultBox(guild, match) {
   if (!roomChannel || !match.resultMessageId) return;
   const msg = await roomChannel.messages.fetch(match.resultMessageId).catch(() => null);
   if (!msg) return;
-  await msg.edit({ embeds: [buildMainMatchEmbed(match)], components: buildResultButtons(match) }).catch(() => {});
+  await msg.edit({ embeds: [buildMainMatchEmbed(match, guild)], components: buildResultButtons(match) }).catch(() => {});
 }
 
 async function startFullMatch(guild, match) {
@@ -807,7 +809,7 @@ async function startFullMatch(guild, match) {
     const roomChat = guild.channels.cache.get(roomChannelId) || roomChannel;
     const mentions = allPlayers.map(id => `<@${id}>`).join(' ');
     const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
-    boxMsg = await roomChat.send({ content: `${mentions}\n${roleMentions}`, embeds: [buildMainMatchEmbed(match)], components: buildResultButtons(match) });
+    boxMsg = await roomChat.send({ content: `${mentions}\n${roleMentions}`, embeds: [buildMainMatchEmbed(match, guild)], components: buildResultButtons(match) });
   } catch (e) {
     console.error('Failed to post match result box:', e.message);
   }

@@ -432,6 +432,12 @@ async function deactivatePoolChannel(guild, channelId) {
 }
 
 async function createVoiceChannels(guild, match) {
+  if (match.voiceChannels && match.voiceChannels.length === 2) {
+    const t1 = guild.channels.cache.get(match.voiceChannels[0]);
+    const t2 = guild.channels.cache.get(match.voiceChannels[1]);
+    if (t1 && t2) return { team1Channel: t1, team2Channel: t2 };
+  }
+
   const mode = match.mode || 'amo';
   const pool = voicePool.get(mode);
 
