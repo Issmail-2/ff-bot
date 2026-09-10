@@ -848,19 +848,16 @@ function buildMatchButtons(match, userId) {
   const cancel = new ButtonBuilder()
     .setCustomId(`cancel_${match.id}`)
     .setEmoji('❌')
-    .setLabel('Cancel Match')
+    .setLabel('Cancel Game')
     .setStyle(ButtonStyle.Danger);
 
-  const row1 = new ActionRowBuilder().addComponents(joinTeam1, joinTeam2, leave);
-
-  const components = [row1];
+  const list = [joinTeam1, joinTeam2, leave];
 
   if (match.status === 'waiting') {
-    const cancelRow = new ActionRowBuilder().addComponents(cancel);
-    components.push(cancelRow);
+    list.push(cancel);
   }
 
-  return components;
+  return list.map(b => new ActionRowBuilder().addComponents(b));
 }
 
 async function ensureStoreChannel(guild) {
@@ -1991,15 +1988,22 @@ client.on(Events.MessageCreate, async (message) => {
         .setCustomId(`setup_${match.id}`)
         .setEmoji('⚙️')
         .setLabel('Set Room Config')
-        .setStyle(ButtonStyle.Primary),
+        .setStyle(ButtonStyle.Primary)
+    );
+    const setupLeaveRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`leave_${match.id}`)
+        .setEmoji('🚪')
+        .setLabel('Leave')
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`cancel_${match.id}`)
         .setEmoji('❌')
-        .setLabel('Cancel')
+        .setLabel('Cancel Game')
         .setStyle(ButtonStyle.Danger)
     );
 
-    const msg = await message.reply({ embeds: [setupEmbed], components: [setupButton] });
+    const msg = await message.reply({ embeds: [setupEmbed], components: [setupButton, setupLeaveRow] });
     match.message = msg.id;
     return;
   }
@@ -2689,6 +2693,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === 'leave') {
+      if (match.status === 'full') {
+        return interaction.reply({ content: '❌ The match has started! You can only leave by using **Cancel Match** or an admin action.', ephemeral: true });
+      }
+      if (match.creatorId === interaction.user.id) {
+        await cancelMatch(interaction.guild, match, `❌ **Match cancelled — the host left** (<@${interaction.user.id}>)`);
+        return interaction.reply({ content: '❌ You left the match. The room has been cancelled.', ephemeral: true });
+      }
       const result = manager.leaveMatch(matchId, interaction.user.id);
       if (!result.success) {
         return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
