@@ -36,29 +36,31 @@ function savePoints(mode, data) {
 
 function getPlayerPoints(userId, mode = 'amo') {
   const data = loadPoints(mode);
-  return data.players[userId] || { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0 };
+  return data.players[userId] || { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0, mvpCount: 0 };
 }
 
-function addPoints(userId, points, type, mode = 'amo') {
+function addPoints(userId, points, type, mode = 'amo', isMvp) {
   const data = loadPoints(mode);
   if (!data.players[userId]) {
-    data.players[userId] = { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0 };
+    data.players[userId] = { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0, mvpCount: 0 };
   }
-  data.players[userId].totalPoints += points;
-  data.players[userId].matchesPlayed += 1;
+  const p = data.players[userId];
+  p.totalPoints += points;
+  p.matchesPlayed += 1;
+  if (isMvp) p.mvpCount = (p.mvpCount || 0) + 1;
   if (type === 'win') {
-    data.players[userId].wins += 1;
+    p.wins += 1;
   } else {
-    data.players[userId].losses += 1;
+    p.losses += 1;
   }
   savePoints(mode, data);
-  return data.players[userId];
+  return p;
 }
 
 function removePoints(userId, points, type, mode = 'amo') {
   const data = loadPoints(mode);
   if (!data.players[userId]) {
-    data.players[userId] = { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0 };
+    data.players[userId] = { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0, mvpCount: 0 };
   }
   const p = data.players[userId];
   p.totalPoints = Math.max(0, p.totalPoints - points);
@@ -79,7 +81,7 @@ function resetAllPoints(mode = 'amo') {
 function adjustPoints(userId, delta, mode = 'amo') {
   const data = loadPoints(mode);
   if (!data.players[userId]) {
-    data.players[userId] = { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0 };
+    data.players[userId] = { wins: 0, losses: 0, totalPoints: 0, matchesPlayed: 0, mvpCount: 0 };
   }
   const p = data.players[userId];
   p.totalPoints = Math.max(0, p.totalPoints + delta);

@@ -6,6 +6,10 @@ try { config = require('../config.json'); } catch { config = {}; }
 if (!config.modes) config.modes = {};
 if (!config.modes.amo) config.modes.amo = {};
 if (!config.modes.esport) config.modes.esport = {};
+if (process.env.AMO_VOICE_CATEGORY_ID) config.modes.amo.voiceCategoryId = process.env.AMO_VOICE_CATEGORY_ID;
+if (process.env.ESPORTS_VOICE_CATEGORY_ID) config.modes.esport.voiceCategoryId = process.env.ESPORTS_VOICE_CATEGORY_ID;
+if (!config.modes.amo.voiceCategoryId) config.modes.amo.voiceCategoryId = '1545316338145165332';
+if (!config.modes.esport.voiceCategoryId) config.modes.esport.voiceCategoryId = '1545386731686076476';
 if (process.env.ROOM_CATEGORY_ID) config.roomCategoryId = process.env.ROOM_CATEGORY_ID;
 if (!config.roomCategoryId) config.roomCategoryId = '1545316338145165332';
 
@@ -13,6 +17,12 @@ const activeMatches = new Map();
 const MATCHES_FILE = path.resolve(__dirname, '..', 'data', 'matches.json');
 const LOGS_FILE = path.resolve(__dirname, '..', 'data', 'matches_log.json');
 const suppressedUsers = new Set();
+const VOICE_POOL_SIZE = parseInt(process.env.VOICE_POOL_SIZE || '0') || (config.voicePoolSize || 5);
+const voicePool = new Map();
+
+function isRealId(id) {
+  return typeof id === 'string' && /^\d{15,20}$/.test(id);
+}
 
 function ensureLogsFile() {
   const dir = path.dirname(LOGS_FILE);
@@ -324,48 +334,143 @@ function isTeamsFull(matchId) {
   return match.team1.length === match.teamSize && match.team2.length === match.teamSize;
 }
 
+async function ensureVoicePool(guild, mode) {
+  const modeConfig = config.modes[mode] || config.modes.amo;
+  const categoryId = modeConfig.voiceCategoryId;
+  const category = guild.channels.cache.get(categoryId);
+  if (!category) { console.log(`[POOL] No voice category for ${mode}`); return; }
+  if (VOICE_POOL_SIZE <= 0) return;
+
+  const existing = guild.channels.cache.filter(c => c.parentId === categoryId && c.type === ChannelType.GuildVoice);
+  const botMember = guild.members.me;
+  const hiddenOverwrites = [
+    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect] }
+  ];
+  if (botMember) {
+    hiddenOverwrites.push({
+      id: botMember.id,
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.MoveMembers]
+    });
+  }
+
+  const need = VOICE_POOL_SIZE * 2;
+  const t1Channels = existing.filter(c => c.name.startsWith('🟢'));
+  const t2Channels = existing.filter(c => c.name.startsWith('🔴'));
+
+  for (let i = t1Channels.size; i < VOICE_POOL_SIZE; i++) {
+    try {
+      const ch = await guild.channels.create({
+        name: `🟢 Team 1 - Slot ${i + 1}`,
+        type: ChannelType.GuildVoice,
+        parent: categoryId,
+        permissionOverwrites: hiddenOverwrites,
+      });
+      console.log(`[POOL] Created ${mode} Team 1 slot ${i + 1}: ${ch.id}`);
+    } catch (e) { console.log(`[POOL] Create error: ${e.message}`); }
+  }
+  for (let i = t2Channels.size; i < VOICE_POOL_SIZE; i++) {
+    try {
+      const ch = await guild.channels.create({
+        name: `🔴 Team 2 - Slot ${i + 1}`,
+        type: ChannelType.GuildVoice,
+        parent: categoryId,
+        permissionOverwrites: hiddenOverwrites,
+      });
+      console.log(`[POOL] Created ${mode} Team 2 slot ${i + 1}: ${ch.id}`);
+    } catch (e) { console.log(`[POOL] Create error: ${e.message}`); }
+  }
+
+  const refreshed = guild.channels.cache.filter(c => c.parentId === categoryId && c.type === ChannelType.GuildVoice);
+  const poolT1 = refreshed.filter(c => c.name.startsWith('🟢')).map(c => c.id);
+  const poolT2 = refreshed.filter(c => c.name.startsWith('🔴')).map(c => c.id);
+  voicePool.set(mode, { t1: poolT1, t2: poolT2 });
+  console.log(`[POOL] ${mode} pool: ${poolT1.length} T1 + ${poolT2.length} T2 channels`);
+}
+
+function findEmptyChannel(guild, mode, team) {
+  const pool = voicePool.get(mode);
+  if (!pool) return null;
+  const ids = team === 1 ? pool.t1 : pool.t2;
+  for (const id of ids) {
+    const ch = guild.channels.cache.get(id);
+    if (ch && ch.members.size === 0) return ch;
+  }
+  return null;
+}
+
+async function activatePoolChannels(guild, match, team1Channel, team2Channel) {
+  const botMember = guild.members.me;
+  for (const [ch, teamIds] of [[team1Channel, match.team1], [team2Channel, match.team2]]) {
+    const overwrites = [
+      { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
+    ];
+    for (const uid of teamIds) {
+      if (!isRealId(uid)) continue;
+      overwrites.push({ id: uid, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
+    }
+    if (botMember) {
+      overwrites.push({ id: botMember.id, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.MoveMembers] });
+    }
+    try { await ch.permissionOverwrites.set(overwrites); } catch (e) { console.log(`[POOL] activate error: ${e.message}`); }
+  }
+}
+
+async function deactivatePoolChannel(guild, channelId) {
+  const ch = guild.channels.cache.get(channelId);
+  if (!ch) return;
+  const botMember = guild.members.me;
+  const hiddenOverwrites = [
+    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect] }
+  ];
+  if (botMember) {
+    hiddenOverwrites.push({
+      id: botMember.id,
+      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.MoveMembers]
+    });
+  }
+  try { await ch.permissionOverwrites.set(hiddenOverwrites); } catch (e) { console.log(`[POOL] deactivate error: ${e.message}`); }
+}
+
 async function createVoiceChannels(guild, match) {
+  const mode = match.mode || 'amo';
+  const pool = voicePool.get(mode);
+
+  if (pool && VOICE_POOL_SIZE > 0) {
+    const t1ch = findEmptyChannel(guild, mode, 1);
+    const t2ch = findEmptyChannel(guild, mode, 2);
+    if (t1ch && t2ch) {
+      await activatePoolChannels(guild, match, t1ch, t2ch);
+      match.voiceChannels = [t1ch.id, t2ch.id];
+      match.usePool = true;
+      console.log(`[POOL] Assigned pool channels for ${mode}: ${t1ch.id} + ${t2ch.id}`);
+      return { team1Channel: t1ch, team2Channel: t2ch };
+    }
+    console.log(`[POOL] No empty pool channels for ${mode}, falling back to create`);
+  }
+
   const category = guild.channels.cache.get(config.roomCategoryId);
   const botMember = guild.members.me;
 
   const team1Overwrites = [
-    {
-      id: guild.id,
-      deny: [PermissionsBitField.Flags.Connect],
-      allow: [PermissionsBitField.Flags.ViewChannel],
-    }
+    { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
   ];
   for (const userId of match.team1) {
-    team1Overwrites.push({
-      id: userId,
-      allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel],
-    });
+    if (!isRealId(userId)) continue;
+    team1Overwrites.push({ id: userId, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
   }
   if (botMember) {
-    team1Overwrites.push({
-      id: botMember.id,
-      allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.MoveMembers],
-    });
+    team1Overwrites.push({ id: botMember.id, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.MoveMembers] });
   }
 
   const team2Overwrites = [
-    {
-      id: guild.id,
-      deny: [PermissionsBitField.Flags.Connect],
-      allow: [PermissionsBitField.Flags.ViewChannel],
-    }
+    { id: guild.id, deny: [PermissionsBitField.Flags.Connect], allow: [PermissionsBitField.Flags.ViewChannel] }
   ];
   for (const userId of match.team2) {
-    team2Overwrites.push({
-      id: userId,
-      allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel],
-    });
+    if (!isRealId(userId)) continue;
+    team2Overwrites.push({ id: userId, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
   }
   if (botMember) {
-    team2Overwrites.push({
-      id: botMember.id,
-      allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.MoveMembers],
-    });
+    team2Overwrites.push({ id: botMember.id, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.MoveMembers] });
   }
 
   const team1Channel = await guild.channels.create({
@@ -397,6 +502,7 @@ async function createChannel(guild, match) {
   ];
   const allPlayers = [...new Set([...match.team1, ...match.team2])];
   for (const userId of allPlayers) {
+    if (!isRealId(userId)) continue;
     overwrites.push({
       id: userId,
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory],
@@ -522,6 +628,16 @@ async function deleteVoiceChannels(guild, match) {
   const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
   match.closing = true;
   suppressUsers(allPlayers);
+
+  if (match.usePool) {
+    for (const channelId of match.voiceChannels) {
+      await deactivatePoolChannel(guild, channelId);
+    }
+    match.voiceChannels = [];
+    match.usePool = false;
+    return;
+  }
+
   for (const channelId of match.voiceChannels) {
     try {
       const channel = guild.channels.cache.get(channelId);
@@ -576,6 +692,8 @@ function endMatch(matchId) {
   }
 }
 
+function getVoicePoolSize() { return VOICE_POOL_SIZE; }
+
 module.exports = {
   createMatch,
   persistMatches,
@@ -605,5 +723,7 @@ module.exports = {
   logMatch,
   getMatchLogs,
   clearAllMatches,
-  endMatch
+  endMatch,
+  ensureVoicePool,
+  getVoicePoolSize
 };
