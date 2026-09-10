@@ -579,12 +579,12 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const t2 = list(match.team2);
 
   const embed = new EmbedBuilder()
-    .setTitle(`🎮 Free Fire ${match.teamSize}v${match.teamSize} Match`)
-    .setColor(COLORS.dark)
-    .setDescription(`Match started by <@${match.creatorId}>\n---`)
+    .setTitle(`👾 __Free Fire ${match.teamSize}v${match.teamSize} Match__`)
+    .setColor('#2F3136')
+    .setDescription(`Match started by <@${match.creatorId}>`)
     .addFields(
-      { name: `🔴 Team 1 (${match.team1.length}/${match.teamSize})`, value: `---\n${t1}` },
-      { name: `🟢 Team 2 (${match.team2.length}/${match.teamSize})`, value: `---\n${t2}` }
+      { name: `🔴 Team 1 (${match.team1.length}/${match.teamSize})`, value: t1, inline: false },
+      { name: `🟢 Team 2 (${match.team2.length}/${match.teamSize})`, value: t2, inline: false }
     )
     .setFooter({ text: BRANDING });
 
@@ -1970,12 +1970,12 @@ client.on(Events.MessageCreate, async (message) => {
     const match = manager.createMatch(message.author.id, teamSize, message.channel.id, mode);
 
     const setupEmbed = new EmbedBuilder()
-      .setTitle(`🎮 Free Fire ${teamSize}v${teamSize} Match`)
+      .setTitle(`👾 __Free Fire ${teamSize}v${teamSize} Match__`)
       .setDescription(
-        `Match started by <@${message.author.id}>\n---\n` +
-        `Press **Set Room Config** to enter your room details, then share the room ID with your team.`
+        `Match started by <@${message.author.id}>\n\n` +
+        `Press **Set Room Config** below to enter your room details, then players use the buttons to lock their slots.`
       )
-      .setColor(COLORS.dark)
+      .setColor('#2F3136')
       .setFooter({ text: BRANDING });
 
     const setupButton = new ActionRowBuilder().addComponents(
