@@ -63,7 +63,7 @@ const jailModule = require('./utils/jail');
 const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const cheaterReports = require('./utils/cheaterReports');
-const { COLORS, BRANDING, progressBar, divider } = require('./utils/ui');
+const { COLORS, BRANDING, progressBar } = require('./utils/ui');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
@@ -581,7 +581,7 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const embed = new EmbedBuilder()
     .setTitle(`${config.emojis.game} ${display.toUpperCase()} • ${match.teamSize}v${match.teamSize}`)
     .setColor(ready ? COLORS.gold : COLORS.primary)
-    .setDescription(`**Hosted by** <@${match.creatorId}>\n\`\`\`${divider('═')}\`\`\``)
+    .setDescription(`**Hosted by** <@${match.creatorId}>`)
     .addFields(
       { name: `${config.emojis.team1} TEAM 1 — \`${progress1}\``, value: `\`\`\`${bar1}\`\`\`\n${teamPanel(match.team1, match.mode || 'amo', match.teamSize, guild)}`, inline: true },
       { name: `${config.emojis.team2} TEAM 2 — \`${progress2}\``, value: `\`\`\`${bar2}\`\`\`\n${teamPanel(match.team2, match.mode || 'amo', match.teamSize, guild)}`, inline: true }
@@ -891,7 +891,7 @@ function buildStoreEmbed(items) {
   return new EmbedBuilder()
     .setTitle('🛒 FREE FIRE STORE')
     .setColor(COLORS.info)
-    .setDescription(`\`\`\`${divider('═')}\`\`\`\n${list}`)
+    .setDescription(`${list}`)
     .addFields(
       { name: '⚙️ HOW TO BUY', value: 'Press the **🛒 Buy** button below and choose an item. The price is **deducted from your balance automatically**. Items with a 📦 counter are limited and sell out at zero.' }
     )
@@ -968,7 +968,7 @@ function buildCombinedLeaderboardEmbed() {
     return `**#${i + 4}** <@${id}> — ${p.totalPoints} pts  (${p.wins}W / ${losses[id] || 0}L)`;
   }).join('\n');
 
-  embed.setDescription(`\`\`\`${divider('═')}\`\`\`\n${podium}`);
+  embed.setDescription(`${podium}`);
   if (rest) embed.addFields({ name: `─────────────`, value: rest });
   embed.setFooter({ text: `${ranked.length} ranked • Updated <t:${ts}:R> • ${BRANDING}` });
   return embed;
@@ -1054,7 +1054,6 @@ async function ensureReportButtonMessage(guild, channel) {
     .setColor(COLORS.danger)
     .setDescription(
       `Facing a cheater? Report them here.\n` +
-      `\`\`\`${divider('═')}\`\`\`\n` +
       `**Report cost:** ${REPORT_COST} pts (deducted from your balance)\n` +
       `**Reward:** if the player is confirmed as a cheater you earn **+${REPORT_REWARD} pts** and a reward role.\n` +
       `False reports are **not refunded**.`
@@ -1180,7 +1179,6 @@ function buildReportEmbed(guild, report) {
     .setTitle(`🛡️ CHEATER REPORT ${report.id}`)
     .setColor(COLORS.danger)
     .setDescription(
-      `\`\`\`${divider('═')}\`\`\`\n` +
       `**👤 Reported player**  ${cheater}\n` +
       `**🌐 Platform**  ${REPORT_PLATFORM_ICON[report.platform] || '🔘'} ${report.platform}\n` +
       `**🗡️ Reported by**  <@${report.reporterId}>\n` +
@@ -1225,15 +1223,13 @@ async function postExpose(guild, report, checkerId, attachments) {
     .setTitle('⛔ EXPOSED CHEATER')
     .setColor(COLORS.danger)
     .setDescription(
-      `\`\`\`${divider('═')}\`\`\`\n` +
       `**👤 Cheater**  <@${report.cheaterId || '—'}>  (${cheaterName})\n` +
       `**🆔 Cheater ID**  \`${report.cheaterId || 'unknown'}\`\n` +
       `**🌐 Platform**  ${REPORT_PLATFORM_ICON[report.platform] || '🔘'} ${report.platform}\n` +
       `**🗡️ Reported by**  <@${report.reporterId}>\n` +
       `**🕵️ Checked by**  <@${checkerId}>\n` +
       `**Report**  ${report.id}\n` +
-      `**🕒 At**  <t:${Math.floor(report.at / 1000)}:f>\n` +
-      `\`\`\`${divider('═')}\`\`\``
+      `**🕒 At**  <t:${Math.floor(report.at / 1000)}:f>`
     )
     .setFooter({ text: BRANDING });
   const files = (attachments || []).map(u => ({ attachment: u }));
@@ -1528,7 +1524,6 @@ async function ensureApplyButtonMessage(guild, channel) {
     .setColor(COLORS.info)
     .setDescription(
       `Want to join the team? Pick the role you are applying for.\n` +
-      `\`\`\`${divider('═')}\`\`\`\n` +
       `**🛡️ Checker**  — review reports, run tests and keep matches clean.\n` +
       `**👥 Staff**  — help manage the server and events.\n` +
       `After you apply, staff will interview you in a voice channel to decide.`
@@ -1626,7 +1621,6 @@ function buildApplyEmbed(guild, app) {
     .setTitle(`📋 ROLE APPLICATION ${app.id}`)
     .setColor(COLORS.info)
     .setDescription(
-      `\`\`\`${divider('═')}\`\`\`\n` +
       `**🛡️ Role**  ${APPLY_TYPE_LABEL[app.roleType] || app.roleType}\n` +
       `**🧑 Applicant**  <@${app.userId}>\n` +
       `**🎮 In-game name**  ${app.ign}\n` +
@@ -1984,7 +1978,7 @@ client.on(Events.MessageCreate, async (message) => {
     const setupEmbed = new EmbedBuilder()
       .setTitle(`${config.emojis.game} ${modeCfg.displayName} • ${teamSize}v${teamSize}`)
       .setDescription(
-        `<@${message.author.id}> is hosting a **${modeCfg.displayName} ${teamSize}v${teamSize}** match!\n\`\`\`${divider('═')}\`\`\`\n` +
+        `<@${message.author.id}> is hosting a **${modeCfg.displayName} ${teamSize}v${teamSize}** match!\n` +
         `**1)** Press **⚙️ Set Room Config** to enter your room details\n` +
         `**2)** Share the room with your team\n` +
         `**3)** Players lock their slot with the buttons below`
@@ -2796,7 +2790,6 @@ const adminCommands = {
       .setTitle(`🏆 ${getModeConfig(mode).displayName} LEADERBOARD`)
       .setColor(COLORS.gold)
       .setDescription(
-        `\`\`\`${divider('═')}\`\`\`\n` +
         sorted.slice(0, 3).map(([id, data], i) => {
           const medal = ['🥇', '🥈', '🥉'][i];
           return `${medal} <@${id}> — **${data.totalPoints} pts**  (${data.wins}W / ${data.losses}L)`;
@@ -3001,7 +2994,7 @@ client.on(Events.MessageCreate, async (message) => {
     const embed = new EmbedBuilder()
       .setTitle(`💰 ${label} BALANCE`)
       .setColor(COLORS.success)
-      .setDescription(`Your match account across both modes.\n\`\`\`${divider('═')}\`\`\``)
+      .setDescription(`Your match account across both modes.`)
       .addFields(
         { name: `🏆 ${getModeConfig('amo').displayName}`, value: `**${amo.totalPoints} pts**\n${amo.wins}W / ${amo.losses}L`, inline: true },
         { name: `⚔️ ${getModeConfig('esport').displayName}`, value: `**${esp.totalPoints} pts**\n${esp.wins}W / ${esp.losses}L`, inline: true }
@@ -3037,13 +3030,11 @@ client.on(Events.MessageCreate, async (message) => {
       .setTitle(`📊 ${label}'s STATS`)
       .setColor(COLORS.info)
       .setDescription(
-        `\`\`\`${divider('═')}\`\`\`\n` +
         `**💰 Total points**  ${combinedPts} pts\n` +
         `${combinedIdx !== -1 ? `**🥇 Combined rank**  ${rankEmoji} **#${combinedIdx + 1}**\n` : ''}` +
         `**🏆 Matches**  ${combinedMatches}  (${combinedWins}W / ${combinedMatches - combinedWins}L)\n` +
         `**🔢 Win rate**  ${winRate}%\n` +
-        `**⭐ MVP count**  ${mvpCount}\n` +
-        `\`\`\`${divider('═')}\`\`\``
+        `**⭐ MVP count**  ${mvpCount}`
       )
       .addFields(
         { name: `🏆 ${getModeConfig('amo').displayName}`, value: `**${amo.totalPoints || 0} pts**\n${amo.wins || 0}W / ${amo.losses || 0}L\n${storage.getRankBadge(targetId, 'amo') || 'Unranked'}`, inline: true },

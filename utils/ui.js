@@ -19,7 +19,7 @@ function progressBar(current, total, size = 8) {
 }
 
 function divider(char = '═', length = 26) {
-  return char.repeat(length);
+  return '';
 }
 
 function createEmbed(color) {
