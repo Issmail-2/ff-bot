@@ -381,10 +381,15 @@ async function ensureVoicePool(guild, mode) {
   }
 
   const refreshed = guild.channels.cache.filter(c => c.parentId === categoryId && c.type === ChannelType.GuildVoice);
-  const poolT1 = refreshed.filter(c => c.name.startsWith('🟢')).map(c => c.id);
-  const poolT2 = refreshed.filter(c => c.name.startsWith('🔴')).map(c => c.id);
+  const poolT1 = refreshed.filter(c => c.name.startsWith('🟢')).sort((a, b) => slotNum(a.name) - slotNum(b.name)).map(c => c.id);
+  const poolT2 = refreshed.filter(c => c.name.startsWith('🔴')).sort((a, b) => slotNum(a.name) - slotNum(b.name)).map(c => c.id);
   voicePool.set(mode, { t1: poolT1, t2: poolT2 });
   console.log(`[POOL] ${mode} pool: ${poolT1.length} T1 + ${poolT2.length} T2 channels`);
+}
+
+function slotNum(name) {
+  const m = String(name).match(/Slot\s*(\d+)/i);
+  return m ? parseInt(m[1], 10) : 999;
 }
 
 function findEmptyChannel(guild, mode, team) {
