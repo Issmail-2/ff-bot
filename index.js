@@ -955,6 +955,7 @@ function buildCombinedLeaderboardEmbed() {
 
   if (!ranked.length) {
     embed.setDescription('No matches played yet.');
+    embed.addFields({ name: '🤖 BOT STATUS', value: '🟢 **ON**' });
     embed.setFooter({ text: `Updated <t:${ts}:R> • ${BRANDING}` });
     return embed;
   }
@@ -969,6 +970,7 @@ function buildCombinedLeaderboardEmbed() {
 
   embed.setDescription(`${podium}`);
   if (rest) embed.addFields({ name: `─────────────`, value: rest });
+  embed.addFields({ name: '🤖 BOT STATUS', value: '🟢 **ON**' });
   embed.setFooter({ text: `${ranked.length} ranked • Updated <t:${ts}:R> • ${BRANDING}` });
   return embed;
 }
