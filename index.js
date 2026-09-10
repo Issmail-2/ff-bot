@@ -837,20 +837,26 @@ function buildMatchButtons(match, userId) {
     .setLabel('Join Team 2')
     .setStyle(ButtonStyle.Success);
 
-  const leave = new ButtonBuilder()
-    .setCustomId(`leave_${match.id}`)
-    .setLabel('Leave')
-    .setStyle(ButtonStyle.Secondary);
+  const isCreator = match.creatorId === userId;
 
-  const cancel = new ButtonBuilder()
-    .setCustomId(`cancel_${match.id}`)
-    .setLabel('Cancel Game')
-    .setStyle(ButtonStyle.Danger);
+  const buttons = [joinTeam1, joinTeam2];
 
-  const buttons = [joinTeam1, joinTeam2, leave];
+  if (!isCreator) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`leave_${match.id}`)
+        .setLabel('Leave')
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
 
   if (match.status === 'waiting') {
-    buttons.push(cancel);
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`cancel_${match.id}`)
+        .setLabel('Cancel Game')
+        .setStyle(ButtonStyle.Danger)
+    );
   }
 
   const row = new ActionRowBuilder().addComponents(buttons);
@@ -1983,14 +1989,7 @@ client.on(Events.MessageCreate, async (message) => {
         .setCustomId(`setup_${match.id}`)
         .setEmoji('⚙️')
         .setLabel('Set Room Config')
-        .setStyle(ButtonStyle.Primary)
-    );
-    const setupLeaveRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`leave_${match.id}`)
-        .setEmoji('🚪')
-        .setLabel('Leave')
-        .setStyle(ButtonStyle.Secondary),
+        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId(`cancel_${match.id}`)
         .setEmoji('❌')
@@ -1998,7 +1997,7 @@ client.on(Events.MessageCreate, async (message) => {
         .setStyle(ButtonStyle.Danger)
     );
 
-    const msg = await message.reply({ embeds: [setupEmbed], components: [setupButton, setupLeaveRow] });
+    const msg = await message.reply({ embeds: [setupEmbed], components: [setupButton] });
     match.message = msg.id;
     return;
   }
