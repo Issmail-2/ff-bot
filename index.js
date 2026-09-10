@@ -16,7 +16,10 @@ if (!config.storeChannelId) config.storeChannelId = process.env.STORE_CHANNEL_ID
 if (!config.ticketCategoryId) config.ticketCategoryId = process.env.TICKET_CATEGORY_ID || '';
 if (!config.rankOneRoleId) config.rankOneRoleId = process.env.RANK_ONE_ROLE_ID || '';
 if (!config.setResultRoles) {
-  config.setResultRoles = process.env.SET_RESULT_ROLE_IDS ? process.env.SET_RESULT_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310', '1466082863115145441'];
+  config.setResultRoles = process.env.SET_RESULT_ROLE_IDS ? process.env.SET_RESULT_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310', '146608286311545441', '1450458684428783616', '1546807156970487838', '1459133371874807921'];
+}
+if (!config.matchPingRoles) {
+  config.matchPingRoles = process.env.MATCH_PING_ROLE_IDS ? process.env.MATCH_PING_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1450458684428783616', '1546807156970487838', '146608286311545441', '1459133371874807921'];
 }
 if (!config.inviteBonus) config.inviteBonus = parseInt(process.env.INVITE_BONUS_POINTS) || 10;
 if (!config.voiceCategoryId) config.voiceCategoryId = config.modes.amo.voiceCategoryId;
@@ -808,7 +811,7 @@ async function startFullMatch(guild, match) {
   try {
     const roomChat = guild.channels.cache.get(roomChannelId) || roomChannel;
     const mentions = allPlayers.map(id => `<@${id}>`).join(' ');
-    const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
+    const roleMentions = (config.matchPingRoles || []).map(id => `<@&${id}>`).join(' ');
     boxMsg = await roomChat.send({ content: `${mentions}\n${roleMentions}`, embeds: [buildMainMatchEmbed(match, guild)], components: buildResultButtons(match) });
   } catch (e) {
     console.error('Failed to post match result box:', e.message);
