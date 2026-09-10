@@ -283,7 +283,7 @@ const COMMANDS_INFO = `🎮 **HOW TO USE THE BOT - FREE FIRE MATCHES**
 5️⃣ When both teams are full, a **result box** appears - the 2 team captains vote the **MVP** for winner and loser (top 2 players per team only).
 6️⃣ Points are added automatically: Winner +50, Winner MVP +80, Loser +10, Loser MVP +30.
 7️⃣ To cancel a **full** match, players press **❌ Cancel Match** - each team needs 2 votes to auto-cancel (you can also revoke your vote with **❌ Cancel My Vote**).
-8️⃣ Check ranks with the **Rank #** nicknames or \`!leaderboard\`.
+8️⃣ Check ranks with the **Rank #** nicknames or \`&leaderboard\`.
 
 👑 **RANK #1 PRIZE - AUTO ROLE**
 The **#1 ranked player** automatically receives the Rank #1 role!
@@ -298,16 +298,16 @@ Refresh: \`&refreshstore\`
 👥 **ALL MEMBERS**
 \`!play 2v2 | 3v3 | 4v4\` - host a match
 \`!esport 2v2 | 3v3 | 4v4\` - host an esport match
-\`!leaderboard\` - show the top players
-\`!balance\` (or \`!bal\`) - check your points (also \`!balance @user\`)
+\`&leaderboard\` - show the top players
+\`&balance\` (or \`&bal\`) - check your points (also \`&balance @user\`)
 
 🔧 **SUPERVISORS / ADMINS** (<@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310>)
-\`!setpoints @user points win/loss\` - adjust a player's points (also: <@&1450212500581646460> and <@1177600499298599035>)
-\`!resetpoints\` - reset all points in all modes
-\`!cancelgame @user\` - cancel a player's match
-\`!clearmatches\` / \`!cleargames\` - clear stuck matches
-\`!setranks\` - refresh rank nicknames
-\`!resetvote\` - reset the vote and refund points
+\`&setpoints @user points win/loss\` - adjust a player's points (also: <@&1450212500581646460> and <@1177600499298599035>)
+\`&resetpoints\` - reset all points in all modes
+\`&cancelgame @user\` - cancel a player's match
+\`&clearmatches\` / \`&cleargames\` - clear stuck matches
+\`&setranks\` - refresh rank nicknames
+\`&resetvote\` - reset the vote and refund points
 \`&remove <userID> <points>\` - remove points from a player
 \`&clear <n>\` - delete up to 100 messages (1-100)
 \`&commands\` - repost this commands list
@@ -323,7 +323,7 @@ Refresh: \`&refreshstore\`
 
 ⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\`
 💠 Store: \`role\` items auto-grant the role instantly, \`gems\`/diamonds deduct points immediately and staff delivers them.
-🔀 All commands work with \`!\` or \`&\` (e.g. \`!resetpoints\` / \`&resetpoints\`) - except \`!play\` and \`!esport\` which use \`!\` only.`;
+🔀 Commands use \`&\` (e.g. \`&resetpoints\`, \`&resetvote\`) - except \`!play\` and \`!esport\` which use \`!\` only. All commands also accept \`!\` as an alternative if you prefer.`;
 
 function buildInfoEmbeds() {
   const MAX = 4000;
