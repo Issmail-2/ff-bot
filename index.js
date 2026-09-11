@@ -74,6 +74,7 @@ const REPORT_CHANNEL_ID = process.env.REPORT_CHANNEL_ID || '1546846855676043264'
 const CHECK_CHANNEL_ID = process.env.CHECK_CHANNEL_ID || '1546846854556286976';
 const EXPOSE_CHANNEL_ID = process.env.EXPOSE_CHANNEL_ID || '1518059555622228038';
 const APPLY_CATEGORY_ID = process.env.APPLY_CATEGORY_ID || '1476278897107538023';
+const APPLY_QUEUE_CHANNEL_ID = process.env.APPLY_QUEUE_CHANNEL_ID || '1450844020853968896';
 const REPORT_COST = parseInt(process.env.REPORT_COST || '', 10) || 50;
 const REPORT_REWARD = parseInt(process.env.REPORT_REWARD || '', 10) || 100;
 
@@ -1586,7 +1587,8 @@ async function ensureApplyChannels(guild) {
     await ensureApplyButtonMessage(guild, applyChannel);
   }
 
-  let queueChannel = guild.channels.cache.get(S.applyQueueChannelId)
+  let queueChannel = guild.channels.cache.get(APPLY_QUEUE_CHANNEL_ID)
+    || guild.channels.cache.get(S.applyQueueChannelId)
     || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'role-applications');
   if (!queueChannel) {
     try {

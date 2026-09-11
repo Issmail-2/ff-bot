@@ -16,8 +16,8 @@ const DEFAULTS = {
   applyCategoryId: null,
   applyChannelId: null,
   applyQueueChannelId: null,
-  applyCheckerRoleId: null,
-  applyStaffRoleId: null
+  applyCheckerRoleId: '1537301155955216394',
+  applyStaffRoleId: '1466082863115145441'
 };
 
 function ensureFile() {
