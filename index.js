@@ -91,6 +91,8 @@ const CHANNEL_NAMES = {
   vcStaff: '👥 𝐒𝐓𝐀𝐅𝐅'
 };
 
+const JAIL_CHANNEL_IDS = (process.env.JAIL_CHANNEL_IDS || '1540241726478753842,1545272411144982608').split(',').map(s => s.trim()).filter(Boolean);
+
 async function renameIfDifferent(channel, name) {
   if (channel && channel.name !== name) {
     try { await channel.setName(name); } catch (e) { console.log(`[CH] rename "${channel.name}" -> "${name}" failed:`, e.message); }
@@ -208,31 +210,45 @@ async function getOrCreateJailRole(guild) {
 }
 
 async function getOrCreateJailChannels(guild) {
-  const category = guild.channels.cache.get(config.jailCategoryId) || guild.channels.cache.find(c => c.name === '⛓️ Jail' && c.type === ChannelType.GuildCategory);
-  let cat;
-  if (category) {
-    cat = category;
-  } else {
-    cat = await guild.channels.create({
+  const pinIds = JAIL_CHANNEL_IDS.map(id => guild.channels.cache.get(id)).filter(Boolean);
+  let text = pinIds.find(c => c.type === ChannelType.GuildText);
+  let voice = pinIds.find(c => c.type === ChannelType.GuildVoice);
+  const remaining = pinIds.filter(c => c !== text && c !== voice);
+
+  if (!text && remaining.length) text = remaining.shift();
+  if (text && text.type !== ChannelType.GuildText) text = null;
+  if (!voice && remaining.length) voice = remaining.shift();
+  if (voice && voice.type !== ChannelType.GuildVoice) voice = null;
+
+  if (text) config.jailTextChannelId = text.id;
+  if (voice) config.jailVoiceChannelId = voice.id;
+
+  if (text && voice) return { category: null, text, voice };
+
+  let category = guild.channels.cache.get(config.jailCategoryId) || guild.channels.cache.find(c => c.name === '⛓️ Jail' && c.type === ChannelType.GuildCategory);
+  if (!category && (!text || !voice)) {
+    category = await guild.channels.create({
       name: '⛓️ Jail',
       type: ChannelType.GuildCategory,
       permissionOverwrites: [{ id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] }]
     });
-    config.jailCategoryId = cat.id;
+    config.jailCategoryId = category.id;
   }
-  let text = config.jailTextChannelId ? guild.channels.cache.get(config.jailTextChannelId) : null;
-  if (!text) text = cat.children.cache.find(c => c.type === ChannelType.GuildText);
+  if (!text) text = (category ? category.children.cache.find(c => c.type === ChannelType.GuildText) : null)
+    || (config.jailTextChannelId ? guild.channels.cache.get(config.jailTextChannelId) : null)
+    || (category ? category.children.cache.first(c => c.type === ChannelType.GuildText) : null);
   if (!text) {
-    text = await guild.channels.create({ name: '🚪│jail', type: ChannelType.GuildText, parent: cat.id });
+    text = await guild.channels.create({ name: '🚪│jail', type: ChannelType.GuildText, parent: category ? category.id : undefined });
     config.jailTextChannelId = text.id;
   }
-  let voice = config.jailVoiceChannelId ? guild.channels.cache.get(config.jailVoiceChannelId) : null;
-  if (!voice) voice = cat.children.cache.find(c => c.type === ChannelType.GuildVoice);
+  if (!voice) voice = (category ? category.children.cache.find(c => c.type === ChannelType.GuildVoice) : null)
+    || (config.jailVoiceChannelId ? guild.channels.cache.get(config.jailVoiceChannelId) : null)
+    || (category ? category.children.cache.first(c => c.type === ChannelType.GuildVoice) : null);
   if (!voice) {
-    voice = await guild.channels.create({ name: '🔇│jail', type: ChannelType.GuildVoice, parent: cat.id });
+    voice = await guild.channels.create({ name: '🔇│jail', type: ChannelType.GuildVoice, parent: category ? category.id : undefined });
     config.jailVoiceChannelId = voice.id;
   }
-  return { category: cat, text, voice };
+  return { category: category || null, text, voice };
 }
 
 async function applyJail(guild, member) {
@@ -241,18 +257,27 @@ async function applyJail(guild, member) {
 
   try { await role.setPermissions([]); } catch (e) { console.log('[JAIL] role perms:', e.message); }
 
-  await jail.category.permissionOverwrites.create(role.id, { allow: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
-  await jail.text.permissionOverwrites.create(role.id, {
-    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
-  }).catch(() => {});
-  await jail.voice.permissionOverwrites.create(role.id, {
-    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect]
-  }).catch(() => {});
+  if (jail.category) {
+    await jail.category.permissionOverwrites.create(role.id, { allow: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
+  }
+  const jailChannelIds = new Set([...JAIL_CHANNEL_IDS, jail.text.id, jail.voice.id].filter(Boolean));
+  for (const ch of [jail.text, jail.voice]) {
+    if (!ch) continue;
+    if (ch.type === ChannelType.GuildText) {
+      await ch.permissionOverwrites.create(role.id, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
+      }).catch(() => {});
+    } else {
+      await ch.permissionOverwrites.create(role.id, {
+        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect]
+      }).catch(() => {});
+    }
+  }
 
   const affected = [];
   for (const channel of guild.channels.cache.values()) {
-    if (channel.id === jail.category.id || channel.id === jail.text.id || channel.id === jail.voice.id) continue;
     if (channel.type === ChannelType.GuildCategory) continue;
+    if (jailChannelIds.has(channel.id)) continue;
     if (!channel.permissionOverwrites) continue;
     await channel.permissionOverwrites.create(role.id, { deny: [PermissionsBitField.Flags.ViewChannel] })
       .then(() => affected.push(channel.id))
