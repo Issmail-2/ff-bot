@@ -66,7 +66,7 @@ const jailModule = require('./utils/jail');
 const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const cheaterReports = require('./utils/cheaterReports');
-const { COLORS, BRANDING, progressBar } = require('./utils/ui');
+const { COLORS, BRANDING, progressBar, divider } = require('./utils/ui');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';

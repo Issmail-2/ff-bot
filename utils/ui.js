@@ -19,7 +19,8 @@ function progressBar(current, total, size = 8) {
 }
 
 function divider(char = '═', length = 26) {
-  return '';
+  const ch = char && char.length ? char[0] : '═';
+  return ch.repeat(length);
 }
 
 function createEmbed(color) {
