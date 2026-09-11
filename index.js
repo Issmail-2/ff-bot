@@ -1668,7 +1668,7 @@ async function handleApplyStart(interaction, roleType) {
       new TextInputBuilder().setCustomId('applyAge').setLabel('Age').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('minimum 13')
     ),
     new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('applyWhy').setLabel('Why should we trust you? (experience / activity)').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('Tell us about your experience, schedule and why you deserve the role.')
+      new TextInputBuilder().setCustomId('applyWhy').setLabel('Why trust you? (experience / activity)').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('Tell us about your experience, schedule and why you deserve the role.')
     )
   );
   return interaction.showModal(modal);
