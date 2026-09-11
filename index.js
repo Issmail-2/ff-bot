@@ -1060,12 +1060,17 @@ async function ensureReportButtonMessage(guild, channel) {
     .setTitle('🛡️ REPORT A PLAYER')
     .setColor(COLORS.danger)
     .setDescription(
-      `Facing a cheater? Report them here.\n` +
-      `**Report cost:** ${REPORT_COST} pts (deducted from your balance)\n` +
-      `**Reward:** if the player is confirmed as a cheater you earn **+${REPORT_REWARD} pts** and a reward role.\n` +
-      `False reports are **not refunded**.`
+      `Saw a cheater in a match? Report them here and let the team check it.\n` +
+      `\`\`\`${divider('═')}\`\`\``
     )
-    .setFooter({ text: BRANDING });
+    .addFields(
+      { name: '📌 How it works', value: '**1.** Tap **Report Player**\n**2.** Name the player + pick their platform\n**3.** Checkers review it and run the tests' },
+      { name: '💰 Cost', value: `**-${REPORT_COST} pts** from your balance`, inline: true },
+      { name: '🎁 Reward', value: `**+${REPORT_REWARD} pts** + reward role if confirmed`, inline: true },
+      { name: '⚠️ Note', value: 'False reports are **not refunded**. Only report real cheaters.' }
+    )
+    .setFooter({ text: BRANDING })
+    .setTimestamp();
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('report_player').setEmoji('🛡️').setLabel('Report Player').setStyle(ButtonStyle.Danger)
   );
@@ -1188,16 +1193,16 @@ function buildReportEmbed(guild, report) {
   return new EmbedBuilder()
     .setTitle(`🛡️ CHEATER REPORT ${report.id}`)
     .setColor(COLORS.danger)
-    .setDescription(
-      `**👤 Reported player**  ${cheater}\n` +
-      `**🌐 Platform**  ${REPORT_PLATFORM_ICON[report.platform] || '🔘'} ${report.platform}\n` +
-      `**🗡️ Reported by**  <@${report.reporterId}>\n` +
-      `**🕒 At**  <t:${Math.floor(report.at / 1000)}:f>\n` +
-      `**⚡ Status**  ${statusMap[report.status] || report.status}\n` +
-      `${report.claimedBy ? `**🙋 Claimed by**  <@${report.claimedBy}>\n` : ''}` +
-      `${report.status === 'marked' && report.checkedBy ? `**🕵️ Checked by**  <@${report.checkedBy}>` : ''}`
+    .setDescription(`\`\`\`${divider('═')}\`\`\``)
+    .addFields(
+      { name: '👤 Reported player', value: cheater, inline: true },
+      { name: '🌐 Platform', value: `${REPORT_PLATFORM_ICON[report.platform] || '🔘'} ${report.platform}`, inline: true },
+      { name: '🗡️ Reported by', value: `<@${report.reporterId}>`, inline: true },
+      { name: '⚡ Status', value: statusMap[report.status] || report.status, inline: true },
+      { name: '🕒 At', value: `<t:${Math.floor(report.at / 1000)}:f>`, inline: true },
+      { name: '🕵️ Checked by', value: report.checkedBy ? `<@${report.checkedBy}>` : (report.claimedBy ? `<@${report.claimedBy}>` : '—'), inline: true }
     )
-    .setFooter({ text: `${report.guildId ? '' : ''}${BRANDING}` });
+    .setFooter({ text: BRANDING });
 }
 
 function buildReportButtons(report) {
@@ -1316,10 +1321,12 @@ async function handleReportModal(interaction) {
     .setTitle('🌐 SELECT PLATFORM')
     .setColor(COLORS.info)
     .setDescription(
-      `Reported player: ${draft.cheaterId ? `<@${draft.cheaterId}>` : `**${draft.cheaterName}**`}\n` +
+      `\`\`\`${divider('═')}\`\`\`\n` +
+      `**👤 Reported player**  ${draft.cheaterId ? `<@${draft.cheaterId}>` : `**${draft.cheaterName}**`}\n` +
       `Select the platform they play on to finalize the report.`
     )
-    .setFooter({ text: BRANDING });
+    .setFooter({ text: BRANDING })
+    .setTimestamp();
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`reportplat_${token}_pc`).setEmoji('🖥️').setLabel('PC').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`reportplat_${token}_android`).setEmoji('🤖').setLabel('Android').setStyle(ButtonStyle.Secondary),
@@ -1377,11 +1384,13 @@ async function handleReportPlatform(interaction) {
   const success = new EmbedBuilder()
     .setTitle('🛡️ REPORT SUBMITTED')
     .setColor(COLORS.success)
-    .setDescription(
-      `**${REPORT_COST} pts** were deducted.\n` +
-      `If **${draft.cheaterName}** is confirmed as a cheater you will receive **+${REPORT_REWARD} pts** and a reward role.`
+    .setDescription(`\`\`\`${divider('═')}\`\`\``)
+    .addFields(
+      { name: '💸 Cost deducted', value: `**-${REPORT_COST} pts**`, inline: true },
+      { name: '🎁 Potential reward', value: `**+${REPORT_REWARD} pts** + role`, inline: true }
     )
-    .setFooter({ text: BRANDING });
+    .setFooter({ text: BRANDING })
+    .setTimestamp();
   return interaction.update({ embeds: [success], components: [] });
 }
 
@@ -1532,17 +1541,21 @@ async function ensureApplyButtonMessage(guild, channel) {
   } catch (e) { /* ignore */ }
   const embed = new EmbedBuilder()
     .setTitle('📋 ROLE APPLICATION')
-    .setColor(COLORS.info)
+    .setColor(COLORS.primary)
     .setDescription(
-      `Want to join the team? Pick the role you are applying for.\n` +
-      `**🛡️ Checker**  — review reports, run tests and keep matches clean.\n` +
-      `**👥 Staff**  — help manage the server and events.\n` +
-      `After you apply, staff will interview you in a voice channel to decide.`
+      `Want to join the team? Choose the role you are applying for below.\n` +
+      `\`\`\`${divider('═')}\`\`\``
     )
-    .setFooter({ text: BRANDING });
+    .addFields(
+      { name: '🛡️ Checker', value: 'Keep matches clean — review reports, run tests and handle the proof checks.', inline: true },
+      { name: '👥 Staff', value: 'Manage the server, events and help the community.', inline: true },
+      { name: '📌 How it works', value: '**1.** Tap the role you want\n**2.** Fill in the quick form\n**3.** Staff interviews you in a voice channel' }
+    )
+    .setFooter({ text: BRANDING })
+    .setTimestamp();
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('apply_start_checker').setEmoji('🛡️').setLabel('Checker Apply').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('apply_start_staff').setEmoji('👥').setLabel('Staff Apply').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId('apply_start_checker').setEmoji('🛡️').setLabel('Apply as Checker').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('apply_start_staff').setEmoji('👥').setLabel('Apply as Staff').setStyle(ButtonStyle.Success)
   );
   await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
 }
@@ -1629,18 +1642,22 @@ async function ensureApplyChannels(guild) {
 
 function buildApplyEmbed(guild, app) {
   const statusMap = { pending: '⏳ Pending', accepted: '✅ Accepted', declined: '❌ Declined' };
-  return new EmbedBuilder()
-    .setTitle(`📋 ROLE APPLICATION ${app.id}`)
-    .setColor(COLORS.info)
-    .setDescription(
-      `**🛡️ Role**  ${APPLY_TYPE_LABEL[app.roleType] || app.roleType}\n` +
-      `**🧑 Applicant**  <@${app.userId}>\n` +
-      `**🎮 In-game name**  ${app.ign}\n` +
-      `**💬 Why / experience**  ${app.why.length > 900 ? app.why.slice(0, 900) + '…' : app.why}\n` +
-      `**🕒 Submitted**  <t:${Math.floor(app.at / 1000)}:f>\n` +
-      `**⚡ Status**  ${statusMap[app.status] || app.status}`
+  const colorMap = { pending: COLORS.info, accepted: COLORS.success, declined: COLORS.danger };
+  const why = app.why.length > 500 ? app.why.slice(0, 500) + '…' : app.why;
+  const rank = guild ? storage.getRankBadge(app.userId, 'amo') || '' : '';
+  const embed = new EmbedBuilder()
+    .setTitle(`${APPLY_TYPE_LABEL[app.roleType] || app.roleType} — ${app.id}`)
+    .setColor(colorMap[app.status] || COLORS.info)
+    .setDescription(`\`\`\`${divider('═')}\`\`\``)
+    .addFields(
+      { name: '🧑 Applicant', value: `<@${app.userId}>${rank ? ` ${rank}` : ''}`, inline: true },
+      { name: '🎮 In-game name', value: app.ign, inline: true },
+      { name: '📝 Why / experience', value: why },
+      { name: '⚡ Status', value: statusMap[app.status] || app.status, inline: true },
+      { name: '🕒 Submitted', value: `<t:${Math.floor(app.at / 1000)}:f>`, inline: true }
     )
     .setFooter({ text: BRANDING });
+  return embed;
 }
 
 function buildApplyButtons(appId) {
@@ -1651,7 +1668,7 @@ function buildApplyButtons(appId) {
       new ButtonBuilder().setCustomId(`app_staffvc_${appId}`).setEmoji('👥').setLabel('Staff VC').setStyle(ButtonStyle.Secondary)
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`app_accept_${appId}`).setEmoji('✅').setLabel('Accept').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`app_accept_${appId}`).setEmoji('✅').setLabel('Accept & Grant Role').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`app_decline_${appId}`).setEmoji('❌').setLabel('Decline').setStyle(ButtonStyle.Danger)
     )
   ];
@@ -1710,7 +1727,14 @@ async function handleApplyModal(interaction) {
   }
 
   const reply = posted
-    ? { content: `✅ **Application submitted!** (${app.id})\nStaff will review it and interview you in a voice channel. Keep an eye on your DMs.`, ephemeral: true }
+    ? { embeds: [new EmbedBuilder()
+        .setTitle('✅ APPLICATION SUBMITTED')
+        .setColor(COLORS.success)
+        .setDescription(`\`\`\`${divider('═')}\`\`\``)
+        .addFields(
+          { name: '📄 Application', value: app.id, inline: true },
+          { name: '🛡️ Role', value: APPLY_TYPE_LABEL[roleType], inline: true }
+        )], ephemeral: true, content: 'Staff will review it and interview you in a voice channel. Keep an eye on your DMs.' }
     : { content: '❌ Could not post your application — try again later.', ephemeral: true };
   return interaction.reply(reply);
 }
