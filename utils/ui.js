@@ -11,7 +11,7 @@ const COLORS = {
   dark: 0x2B2D31
 };
 
-const BRANDING = 'FREE FIRE • AutoMatch';
+const BRANDING = '© Avengers Server • All Rights Reserved';
 
 function progressBar(current, total, size = 8) {
   const filled = Math.max(0, Math.min(size, Math.round((current / Math.max(1, total)) * size)));
