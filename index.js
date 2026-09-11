@@ -278,56 +278,61 @@ async function unjailMember(guild, member, role, affected, removedRoles) {
   }
 }
 
-const COMMANDS_INFO = `🎮 **HOW TO USE THE BOT - FREE FIRE MATCHES**
+const COMMANDS_INFO = `🎮 **HOW TO PLAY — FREE FIRE MATCHES**
 ━━━━━━━━━━━━━━━━━━━━━━━━
-1️⃣ Join one of the **lobby voice channels**.
-2️⃣ Host a match: type \`!play 2v2\`, \`!play 3v3\` or \`!play 4v4\` (in the matches channel), or \`!esport 2v2/3v3/4v4\` in the esport channel.
-3️⃣ Click **🏠 Room Config**, enter the Room ID / Password (and an optional room name).
-4️⃣ Players join Team 1 / Team 2 with the join buttons (key required if the host set one). When the room is full the roster is **locked** - nobody can leave or join.
-5️⃣ When both teams are full, a **result box** appears - the 2 team captains vote the **MVP** for winner and loser (top 2 players per team only).
-6️⃣ Points are added automatically: Winner +50, Winner MVP +80, Loser +10, Loser MVP +30.
-7️⃣ To cancel a **full** match, players press **❌ Cancel Match** - each team needs 2 votes to auto-cancel (you can also revoke your vote with **❌ Cancel My Vote**).
-8️⃣ Check ranks with the **Rank #** nicknames or \`&leaderboard\`.
+1️⃣ Join a **lobby voice channel**.
+2️⃣ Type \`!play 2v2\`, \`!play 3v3\` or \`!play 4v4\` in the matches channel (\`!esport …\` in the esport channel).
+3️⃣ Click **🏠 Room Config** and enter the Room ID / Password (optional room name also supported).
+4️⃣ Players join **Team 1 / Team 2** — if the host set a join key you'll be asked for it. Once both teams are full the roster **locks**.
+5️⃣ A **result box** appears — the 2 team captains vote the **MVP** for the winning and losing side.
+6️⃣ Points are awarded automatically: Winner **+50**, Winner MVP **+80**, Loser **+10**, Loser MVP **+30**.
+7️⃣ Want to cancel a full match? Press **❌ Cancel Match** — each team needs 2 votes to cancel. You can revoke with **❌ Cancel My Vote**.
+8️⃣ Track your rank with the **Rank #** nicknames or \`!leaderboard\`.
 
-👑 **RANK #1 PRIZE - AUTO ROLE**
-The **#1 ranked player** automatically receives the Rank #1 role!
-
-🛒 **STORE** (in the **\`store\`** channel)
-The store is a dedicated channel with a fixed **STORE / Available Items** embed and a single **🛒 Buy** button. Press it, pick an item from the dropdown, and the **price is deducted from your balance automatically**. Role items are granted instantly, diamonds notify staff to deliver to you.
-Supervisors add items: \`&storeadd <name>|<cost>|<role|gems>|<roleId (role only)>\`
-Remove items: \`&storeremove <itemId>\`
-Refresh: \`&refreshstore\`
+👑 **RANK #1 PRIZE — AUTO ROLE**
+The **#1 ranked player** automatically receives the Role #1 role.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
-\`!play 2v2 | 3v3 | 4v4\` - host a match
-\`!esport 2v2 | 3v3 | 4v4\` - host an esport match
-\`&leaderboard\` - show the top players
-\`&balance\` (or \`&bal\`) - check your points (also \`&balance @user\`)
+\`!play 2v2 | 3v3 | 4v4\` — host a match
+\`!esport 2v2 | 3v3 | 4v4\` — host an esport match
+\`!leaderboard\` — show the top players
+\`!balance\` / \`!bal\` — check your points (\`!balance @user\` to check someone else)
+\`!stats [@user]\` — combined stats, rank, win rate and MVP count
 
-🔧 **SUPERVISORS / ADMINS** (<@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310>)
-\`&setpoints @user points win/loss\` - adjust a player's points (also: <@&1450212500581646460> and <@1177600499298599035>)
-\`&resetpoints\` - reset all points in all modes
-\`&cancelgame @user\` - cancel a player's match
-\`&clearmatches\` / \`&cleargames\` - clear stuck matches
-\`&setranks\` - refresh rank nicknames
-\`&resetvote\` - reset the vote and refund points
-\`&remove <userID> <points>\` - remove points from a player
-\`&clear <n>\` - delete up to 100 messages (1-100)
-\`&commands\` - repost this commands list
-\`&storeadd <name>|<cost>|<role|gems>|<roleId>\` - add a store item
-\`&storeremove <id>\` - remove a store item
-\`&refreshstore\` - re-sync the store channel embed
-\`&blacklist <userID> <duration> <reason>\` - blacklist a player from matches
-\`&unblacklist <userID>\` - unblacklist a player
+🛡️ **REPORTS & ROLES**
+Report a cheater in **#report-player** with the **🛡️ Report Player** button — takes **50 pts**, you get **+100 pts** + a reward role if the player is confirmed.
 
-⛓️ **JAIL** (ONLY <@&1450212500581646460> <@&1537318639395545139> <@&1506540916519731310> and <@1177600499298599035>)
-\`&jail <userID> <duration> <reason>\` - lock a player to the jail channels
-\`&unjail <userID>\` - release a jailed player
+Apply for the team in **#role-apply** with the **Apply as Checker / Staff** buttons — staff reviews you and interviews you in a voice channel.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+🔧 **SUPERVISORS / ADMINS**
+\`!setpoints @user points win/loss\` — adjust a player's points
+\`!resetpoints\` — reset all points in all modes
+\`!cancelgame @user\` — cancel a player's match
+\`!endcancel\` — force-end a full match and refund points
+\`!clearmatches\` / \`!cleargames\` — clear stuck matches
+\`!setranks\` — refresh rank nicknames
+\`!resetvote\` — reset the MVP vote and refund points
+\`!remove <userID> <points>\` — remove points from a player
+\`!setrole checker|cheatermark|staff <roleId>\` — configure report/apply roles
+\`!blacklist <userID> <duration> <reason>\` — blacklist from matches
+\`!unblacklist <userID>\` — remove a blacklist
+\`!jail <userID> <duration> <reason>\` — lock a player to the jail
+\`!unjail <userID>\` — release a jailed player
+\`!clear <1-100>\` — bulk-delete messages
+\`!announce <channelId> <message>\` — post an announcement
+\`!commands\` — repost this commands list
+\`!applyfix\` — re-sync the role-apply channels (staff only)
+\`!cheatfix\` — re-sync the report/check channels
+
+🛒 **STORE**
+\`!storeadd <name>|<cost>|<role|gems>|<roleId>|<stock?>\` — add a store item
+\`!storeremove <id>\` — remove a store item
+\`!store\` / \`!refreshstore\` — re-sync the store embed
 
 ⏱️ Durations: \`30m\`, \`5h\`, \`7d\`, \`2w\`, \`perm\`
-💠 Store: \`role\` items auto-grant the role instantly, \`gems\`/diamonds deduct points immediately and staff delivers them.
-🔀 Commands use \`&\` (e.g. \`&resetpoints\`, \`&resetvote\`) - except \`!play\` and \`!esport\` which use \`!\` only. All commands also accept \`!\` as an alternative if you prefer.`;
+💡 All commands work with **\`!\`** or **\`&\`** (e.g. \`!balance\` = \`&balance\`).`;
 
 function buildInfoEmbeds() {
   const MAX = 4000;

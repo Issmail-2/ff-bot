@@ -12,7 +12,17 @@ function ensureFile(file, def) {
 
 function loadStore() {
   ensureFile(STORE_FILE, { items: [], nextId: 1 });
-  return JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
+  } catch (e) {
+    data = null;
+  }
+  if (!data || !Array.isArray(data.items)) {
+    data = { items: [], nextId: 1 };
+    saveStore(data);
+  }
+  return data;
 }
 
 function saveStore(data) {
@@ -21,7 +31,8 @@ function saveStore(data) {
 }
 
 function getItems() {
-  return loadStore().items;
+  const items = loadStore().items;
+  return Array.isArray(items) ? items : [];
 }
 
 function addItem({ name, cost, type, roleId, stock }) {
