@@ -1905,10 +1905,16 @@ client.once(Events.ClientReady, async (c) => {
   }
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
   postCommandsInfoWithRetry();
+  const runEnsure = async (g) => {
+    try { await ensureCheaterChannels(g); } catch (e) { console.log(`[CHEAT] ensure error: ${e.message}`); }
+    try { await ensureApplyChannels(g); } catch (e) { console.log(`[APPLY] ensure error: ${e.message}`); }
+  };
   for (const g of c.guilds.cache.values()) {
-    ensureCheaterChannels(g).catch(() => {});
-    ensureApplyChannels(g).catch(() => {});
+    runEnsure(g);
   }
+  setTimeout(() => {
+    for (const g of c.guilds.cache.values()) runEnsure(g);
+  }, 45000);
   const guild = c.guilds.cache.first();
   const ranked = computeCombinedRanking();
   if (guild && ranked.length) applyRankOneRole(guild, ranked).catch(() => {});
