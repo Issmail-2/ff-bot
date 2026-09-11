@@ -2919,6 +2919,41 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply(`✅ Store updated here (<#${message.channel.id}>) - old message replaced.`);
   }
 
+if (content === '&applyfix' || content === '!applyfix') {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can fix the apply system!');
+    }
+    await ensureApplyChannels(message.guild);
+    const S = settingsStore.loadSettings();
+    const applyCh = message.guild.channels.cache.get(S.applyChannelId);
+    const queueCh = message.guild.channels.cache.get(S.applyQueueChannelId);
+    const cat = message.guild.channels.cache.get(S.applyCategoryId);
+    const vcs = cat ? cat.children.cache.filter(c => c.type === ChannelType.GuildVoice).map(c => c.name) : [];
+    await message.reply(
+      `🔧 **Apply system re-synced**\n` +
+      `📂 Category: ${cat ? cat.name : 'missing'}\n` +
+      `🛡️ Apply: ${applyCh ? `<#${applyCh.id}>` : 'missing'}\n` +
+      `👥 Queue: ${queueCh ? `<#${queueCh.id}>` : 'missing'}\n` +
+      `🎙️ Voices: ${vcs.length ? vcs.join(', ') : 'none'}`
+    );
+    return;
+  }
+
+  if (content === '&cheatfix' || content === '!cheatfix') {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can fix the report system!');
+    }
+    await ensureCheaterChannels(message.guild);
+    const S = settingsStore.loadSettings();
+    await message.reply(
+      `🔧 **Report system re-synced**\n` +
+      `🛡️ Report: ${message.guild.channels.cache.get(S.reportChannelId) ? `<#${S.reportChannelId}>` : 'missing'}\n` +
+      `🔍 Check: ${message.guild.channels.cache.get(S.checkChannelId) ? `<#${S.checkChannelId}>` : 'missing'}\n` +
+      `⛔ Expose: ${message.guild.channels.cache.get(S.exposeChannelId) ? `<#${S.exposeChannelId}>` : 'missing'}`
+    );
+    return;
+  }
+
   if (content.startsWith('!remove')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can remove points!');
