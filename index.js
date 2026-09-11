@@ -78,6 +78,26 @@ const APPLY_QUEUE_CHANNEL_ID = process.env.APPLY_QUEUE_CHANNEL_ID || '1450844020
 const REPORT_COST = parseInt(process.env.REPORT_COST || '', 10) || 50;
 const REPORT_REWARD = parseInt(process.env.REPORT_REWARD || '', 10) || 100;
 
+const CHANNEL_NAMES = {
+  exposeCategory: '🛡️ REPORT CENTER',
+  reportChannel: '🚨 𝐑𝐄𝐏𝐎𝐑𝐓 𝐀 𝐏𝐋𝐀𝐘𝐄𝐑',
+  checkChannel: '🕵️ 𝐂𝐇𝐄𝐀𝐓𝐄𝐑-𝐂𝐇𝐄𝐂𝐊',
+  exposeChannel: '📢 𝐂𝐇𝐄𝐀𝐓𝐄𝐑 𝐄𝐗𝐏𝐎𝐒𝐄𝐃',
+  applyCategory: '📋 ROLE APPLICATION',
+  applyChannel: '📝 𝐀𝐏𝐏𝐋𝐘 𝐅𝐎𝐑 𝐑𝐎𝐋𝐄',
+  queueChannel: '🔒 𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐍𝐓 𝐐𝐔𝐄𝐔𝐄',
+  vcWaiting: '⏳ 𝐖𝐀𝐈𝐓𝐈𝐍𝐆',
+  vcChecker: '🛡️ 𝐂𝐇𝐄𝐂𝐊𝐄𝐑',
+  vcStaff: '👥 𝐒𝐓𝐀𝐅𝐅'
+};
+
+async function renameIfDifferent(channel, name) {
+  if (channel && channel.name !== name) {
+    try { await channel.setName(name); } catch (e) { console.log(`[CH] rename "${channel.name}" -> "${name}" failed:`, e.message); }
+  }
+  return channel;
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -301,9 +321,9 @@ The **#1 ranked player** automatically receives the Role #1 role.
 \`!stats [@user]\` — combined stats, rank, win rate and MVP count
 
 🛡️ **REPORTS & ROLES**
-Report a cheater in **#report-player** with the **🛡️ Report Player** button — takes **50 pts**, you get **+100 pts** + a reward role if the player is confirmed.
+Report a cheater in <#1546846855676043264> with the **🛡️ Report Player** button — takes **50 pts**, you get **+100 pts** + a reward role if the player is confirmed.
 
-Apply for the team in **#role-apply** with the **Apply as Checker / Staff** buttons — staff reviews you and interviews you in a voice channel.
+Apply for the team in <#1546853674167435294> with the **Apply as Checker / Staff** buttons — staff reviews you and interviews you in a voice channel.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 🔧 **SUPERVISORS / ADMINS**
@@ -1086,10 +1106,10 @@ async function ensureCheaterChannels(guild) {
   const S = settingsStore.loadSettings();
 
   let category = guild.channels.cache.get(S.exposeCategoryId || EXPOSE_CATEGORY_ID)
-    || guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === 'expose');
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === CHANNEL_NAMES.exposeCategory.toLowerCase());
   if (!category) {
     try {
-      category = await guild.channels.create({ name: 'expose', type: ChannelType.GuildCategory });
+      category = await guild.channels.create({ name: CHANNEL_NAMES.exposeCategory, type: ChannelType.GuildCategory });
     } catch (e) {
       console.log('[CHEAT] create category failed:', e.message);
     }
@@ -1097,17 +1117,18 @@ async function ensureCheaterChannels(guild) {
   if (category) {
     S.exposeCategoryId = category.id;
     settingsStore.saveSettings(S);
+    await renameIfDifferent(category, CHANNEL_NAMES.exposeCategory);
   }
 
   const checkerRoleIds = getCheckerRoleIds();
 
   let checkChannel = guild.channels.cache.get(CHECK_CHANNEL_ID)
     || guild.channels.cache.get(S.checkChannelId)
-    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'cheater-reports');
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === CHANNEL_NAMES.checkChannel.toLowerCase());
   if (!checkChannel) {
     try {
       checkChannel = await guild.channels.create({
-        name: 'cheater-reports',
+        name: CHANNEL_NAMES.checkChannel,
         type: ChannelType.GuildText,
         parent: category ? category.id : undefined
       });
@@ -1116,6 +1137,7 @@ async function ensureCheaterChannels(guild) {
     }
   }
   if (checkChannel) {
+    await renameIfDifferent(checkChannel, CHANNEL_NAMES.checkChannel);
     checkChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
     for (const rid of checkerRoleIds) {
       checkChannel.permissionOverwrites.create(rid, {
@@ -1128,11 +1150,11 @@ async function ensureCheaterChannels(guild) {
 
   let reportChannel = guild.channels.cache.get(REPORT_CHANNEL_ID)
     || guild.channels.cache.get(S.reportChannelId)
-    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'report-player');
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === CHANNEL_NAMES.reportChannel.toLowerCase());
   if (!reportChannel) {
     try {
       reportChannel = await guild.channels.create({
-        name: 'report-player',
+        name: CHANNEL_NAMES.reportChannel,
         type: ChannelType.GuildText,
         parent: category ? category.id : undefined
       });
@@ -1141,6 +1163,7 @@ async function ensureCheaterChannels(guild) {
     }
   }
   if (reportChannel) {
+    await renameIfDifferent(reportChannel, CHANNEL_NAMES.reportChannel);
     reportChannel.permissionOverwrites.create(guild.id, {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
       deny: [PermissionsBitField.Flags.SendMessages]
@@ -1157,11 +1180,11 @@ async function ensureCheaterChannels(guild) {
 
   let exposeChannel = guild.channels.cache.get(EXPOSE_CHANNEL_ID)
     || guild.channels.cache.get(S.exposeChannelId)
-    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'expose');
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === CHANNEL_NAMES.exposeChannel.toLowerCase());
   if (!exposeChannel) {
     try {
       exposeChannel = await guild.channels.create({
-        name: 'expose',
+        name: CHANNEL_NAMES.exposeChannel,
         type: ChannelType.GuildText,
         parent: category ? category.id : undefined
       });
@@ -1170,6 +1193,7 @@ async function ensureCheaterChannels(guild) {
     }
   }
   if (exposeChannel) {
+    await renameIfDifferent(exposeChannel, CHANNEL_NAMES.exposeChannel);
     exposeChannel.permissionOverwrites.create(guild.id, {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
       deny: [PermissionsBitField.Flags.SendMessages]
@@ -1569,10 +1593,10 @@ async function ensureApplyChannels(guild) {
   const S = settingsStore.loadSettings();
 
   let category = guild.channels.cache.get(S.applyCategoryId || APPLY_CATEGORY_ID)
-    || guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === 'role apply');
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === CHANNEL_NAMES.applyCategory.toLowerCase());
   if (!category) {
     try {
-      category = await guild.channels.create({ name: 'Role Apply', type: ChannelType.GuildCategory });
+      category = await guild.channels.create({ name: CHANNEL_NAMES.applyCategory, type: ChannelType.GuildCategory });
     } catch (e) {
       console.log('[APPLY] create category failed:', e.message);
     }
@@ -1580,14 +1604,15 @@ async function ensureApplyChannels(guild) {
   if (category) {
     S.applyCategoryId = category.id;
     settingsStore.saveSettings(S);
+    await renameIfDifferent(category, CHANNEL_NAMES.applyCategory);
   }
 
   let applyChannel = guild.channels.cache.get(S.applyChannelId)
-    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'role-apply');
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === CHANNEL_NAMES.applyChannel.toLowerCase());
   if (!applyChannel) {
     try {
       applyChannel = await guild.channels.create({
-        name: 'role-apply',
+        name: CHANNEL_NAMES.applyChannel,
         type: ChannelType.GuildText,
         parent: category ? category.id : undefined
       });
@@ -1596,6 +1621,7 @@ async function ensureApplyChannels(guild) {
     }
   }
   if (applyChannel) {
+    await renameIfDifferent(applyChannel, CHANNEL_NAMES.applyChannel);
     applyChannel.permissionOverwrites.create(guild.id, {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
       deny: [PermissionsBitField.Flags.SendMessages]
@@ -1607,11 +1633,11 @@ async function ensureApplyChannels(guild) {
 
   let queueChannel = guild.channels.cache.get(APPLY_QUEUE_CHANNEL_ID)
     || guild.channels.cache.get(S.applyQueueChannelId)
-    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === 'role-applications');
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === CHANNEL_NAMES.queueChannel.toLowerCase());
   if (!queueChannel) {
     try {
       queueChannel = await guild.channels.create({
-        name: 'role-applications',
+        name: CHANNEL_NAMES.queueChannel,
         type: ChannelType.GuildText,
         parent: category ? category.id : undefined
       });
@@ -1620,6 +1646,7 @@ async function ensureApplyChannels(guild) {
     }
   }
   if (queueChannel) {
+    await renameIfDifferent(queueChannel, CHANNEL_NAMES.queueChannel);
     queueChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
     for (const rid of getStaffRoleIds()) {
       queueChannel.permissionOverwrites.create(rid, {
@@ -1630,7 +1657,7 @@ async function ensureApplyChannels(guild) {
     settingsStore.saveSettings(S);
   }
 
-  const vcNames = ['⏳ Waiting for Apply', '🛡️ Checker Role', '👥 Staff Role'];
+  const vcNames = [CHANNEL_NAMES.vcWaiting, CHANNEL_NAMES.vcChecker, CHANNEL_NAMES.vcStaff];
   for (const vcName of vcNames) {
     let vc = category ? category.children.cache.find(c => c.type === ChannelType.GuildVoice && c.name === vcName) : guild.channels.cache.find(c => c.type === ChannelType.GuildVoice && c.name === vcName);
     if (!vc) {
@@ -1640,6 +1667,7 @@ async function ensureApplyChannels(guild) {
         console.log('[APPLY] create voice failed:', e.message);
       }
     }
+    await renameIfDifferent(vc, vcName);
   }
 
   console.log(`[APPLY] channels ensured (apply ${S.applyChannelId}, queue ${S.applyQueueChannelId}, cat ${S.applyCategoryId})`);
@@ -1757,7 +1785,7 @@ async function handleApplyStaffButton(interaction) {
   const member = await interaction.guild.members.fetch(app.userId).catch(() => null);
 
   if (action === 'wait' || action === 'checkervc' || action === 'staffvc') {
-    const vcName = action === 'wait' ? '⏳ Waiting for Apply' : action === 'checkervc' ? '🛡️ Checker Role' : '👥 Staff Role';
+    const vcName = action === 'wait' ? CHANNEL_NAMES.vcWaiting : action === 'checkervc' ? CHANNEL_NAMES.vcChecker : CHANNEL_NAMES.vcStaff;
     let vc = interaction.guild.channels.cache.find(c => c.type === ChannelType.GuildVoice && c.name === vcName);
     if (!vc) {
       const cat = interaction.guild.channels.cache.get(settingsStore.loadSettings().applyCategoryId || APPLY_CATEGORY_ID);
