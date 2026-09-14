@@ -887,16 +887,30 @@ async function startFullMatch(guild, match) {
   return { team1Channel, team2Channel, roomChannel };
 }
 
+function buildTeamSelectEmbed(match) {
+  const t1 = `${config.emojis.team1} **TEAM 1** — \`${match.team1.length}/${match.teamSize}\``;
+  const t2 = `${config.emojis.team2} **TEAM 2** — \`${match.team2.length}/${match.teamSize}\``;
+  return new EmbedBuilder()
+    .setTitle('🎮 TEAM SELECTION')
+    .setColor('#2B2D31')
+    .setDescription(`Choose your side for this **${match.teamSize}v${match.teamSize}** match.`)
+    .addFields(
+      { name: '🔴 TEAM 1', value: t1, inline: true },
+      { name: '🟢 TEAM 2', value: t2, inline: true }
+    )
+    .setFooter({ text: BRANDING });
+}
+
 function buildMatchButtons(match, userId) {
   const joinTeam1 = new ButtonBuilder()
     .setCustomId(`join1_${match.id}`)
-    .setLabel('Join Team 1')
-    .setStyle(ButtonStyle.Danger);
+    .setLabel('TEAM 1')
+    .setStyle(ButtonStyle.Secondary);
 
   const joinTeam2 = new ButtonBuilder()
     .setCustomId(`join2_${match.id}`)
-    .setLabel('Join Team 2')
-    .setStyle(ButtonStyle.Success);
+    .setLabel('TEAM 2')
+    .setStyle(ButtonStyle.Secondary);
 
   const buttons = [joinTeam1, joinTeam2];
 
@@ -924,15 +938,16 @@ async function syncJoinButtons(guild, match) {
   const channel = guild.channels.cache.get(match.channelId);
   if (!channel) return null;
   const components = buildMatchButtons(match, client.user.id);
+  const embed = buildTeamSelectEmbed(match);
   let btnMsg = null;
   if (match.buttonsMessageId) {
     btnMsg = await channel.messages.fetch(match.buttonsMessageId).catch(() => null);
   }
   if (btnMsg) {
-    await btnMsg.edit({ components }).catch(() => {});
+    await btnMsg.edit({ embeds: [embed], components }).catch(() => {});
     return btnMsg;
   }
-  const sent = await channel.send({ components }).catch(() => null);
+  const sent = await channel.send({ embeds: [embed], components }).catch(() => null);
   if (sent) {
     match.buttonsMessageId = sent.id;
     manager.persistMatches();
