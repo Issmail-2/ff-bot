@@ -832,6 +832,11 @@ function buildMainMatchEmbed(match, guild) {
   const t1Field = teamPanel(match.team1, match.mode || 'amo', match.teamSize, guild) || '*Empty*';
   const t2Field = teamPanel(match.team2, match.mode || 'amo', match.teamSize, guild) || '*Empty*';
 
+  const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
+  const mentions = allPlayers.map(id => `<@${id}>`).join(' ');
+  const roleMentions = (config.matchPingRoles || []).map(id => `<@&${id}>`).join(' ');
+  const pingBlock = [mentions, roleMentions].filter(Boolean).join('\n');
+
   let status = '⏳ **Waiting for captains to vote...**';
   const votes = [];
   if (match.winnerVoteSet && match.mvpWinnerId) votes.push(`🏆 **Winner MVP:** <@${match.mvpWinnerId}>`);
@@ -843,6 +848,7 @@ function buildMainMatchEmbed(match, guild) {
     .setTitle(`${config.emojis.game} CUSTOM ROOM`)
     .setColor(COLORS.gold)
     .setDescription(
+      `${pingBlock ? `📣 ${pingBlock}\n\n` : ''}` +
       `🔑 **Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
       `🔒 **Password** _(hover to copy)_\n\`\`\`${match.password}\`\`\``
     )
@@ -892,7 +898,6 @@ async function startFullMatch(guild, match) {
   }
 
   const roomChannelId = match.channelId2;
-  const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
 
   match.winnerVotes = {};
   match.loserVotes = {};
@@ -910,9 +915,7 @@ async function startFullMatch(guild, match) {
   let boxMsg;
   try {
     const roomChat = guild.channels.cache.get(roomChannelId) || roomChannel;
-    const mentions = allPlayers.map(id => `<@${id}>`).join(' ');
-    const roleMentions = (config.matchPingRoles || []).map(id => `<@&${id}>`).join(' ');
-    boxMsg = await roomChat.send({ content: `${mentions}\n${roleMentions}`, embeds: [buildMainMatchEmbed(match, guild)], components: buildResultButtons(match) });
+    boxMsg = await roomChat.send({ embeds: [buildMainMatchEmbed(match, guild)], components: buildResultButtons(match) });
   } catch (e) {
     console.error('Failed to post match result box:', e.message);
   }
