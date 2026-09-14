@@ -697,6 +697,7 @@ async function cancelMatch(guild, match, cancelText) {
     const msg = await baseChannel.messages.fetch(match.message).catch(() => null);
     if (msg) await msg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
   }
+  await clearJoinButtons(guild, match);
   const roomChannel = guild.channels.cache.get(match.channelId2);
   if (roomChannel) {
     if (match.resultMessageId && match.resultMessageId !== match.message) {
@@ -842,6 +843,8 @@ async function startFullMatch(guild, match) {
       }).catch(() => {});
     }
 
+    await clearJoinButtons(guild, match);
+
     const ts = Math.floor(Date.now() / 1000);
     const readyEmbed = new EmbedBuilder()
       .setTitle(`⚔️ MATCH READY • ${match.teamSize}v${match.teamSize}`)
@@ -915,6 +918,41 @@ function buildMatchButtons(match, userId) {
 
   const row = new ActionRowBuilder().addComponents(buttons);
   return [row];
+}
+
+async function syncJoinButtons(guild, match) {
+  const channel = guild.channels.cache.get(match.channelId);
+  if (!channel) return null;
+  const components = buildMatchButtons(match, client.user.id);
+  let btnMsg = null;
+  if (match.buttonsMessageId) {
+    btnMsg = await channel.messages.fetch(match.buttonsMessageId).catch(() => null);
+  }
+  if (btnMsg) {
+    await btnMsg.edit({ components }).catch(() => {});
+    return btnMsg;
+  }
+  const sent = await channel.send({ components }).catch(() => null);
+  if (sent) {
+    match.buttonsMessageId = sent.id;
+    manager.persistMatches();
+  }
+  return sent;
+}
+
+async function clearJoinButtons(guild, match, fallbackContent) {
+  const channel = guild.channels.cache.get(match.channelId);
+  if (!channel || !match.buttonsMessageId) return;
+  const btnMsg = await channel.messages.fetch(match.buttonsMessageId).catch(() => null);
+  if (btnMsg) {
+    if (fallbackContent) {
+      await btnMsg.edit({ content: fallbackContent, embeds: [], components: [] }).catch(() => {});
+    } else {
+      await btnMsg.delete().catch(() => {});
+    }
+  }
+  match.buttonsMessageId = null;
+  manager.persistMatches();
 }
 
 async function ensureStoreChannel(guild) {
@@ -2320,6 +2358,9 @@ async function timeoutMatch(guild, matchId, phase = 'lobby') {
   if (channel) {
     const msg = await channel.messages.fetch(match.message).catch(() => null);
     if (msg) await msg.delete().catch(() => {});
+  }
+  await clearJoinButtons(guild, match);
+  if (channel) {
     if (phase === 'config') {
       await channel.send('⏰ **Room config timed out!** The host didn\'t set up the room within 30 seconds. Match cancelled.').catch(() => {});
     } else {
@@ -2345,10 +2386,10 @@ async function performJoin(interaction, match, team) {
 
   const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
   if (msg) {
-    await msg.edit({
-      embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)],
-      components: buildMatchButtons(match, interaction.user.id)
-    });
+    await msg.edit({ embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)] });
+  }
+  if (!manager.isTeamsFull(match.id)) {
+    await syncJoinButtons(interaction.guild, match);
   }
 
   await interaction.reply({ content: `✅ Joined Team ${team}!`, ephemeral: true });
@@ -2448,16 +2489,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     try {
       const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
-      const components = buildMatchButtons(match, interaction.user.id);
 
       const channel = interaction.guild.channels.cache.get(match.channelId);
       console.log('[MODAL] apostado channel found:', !!channel);
       const oldMsg = await channel.messages.fetch(match.message).catch(() => null);
       if (oldMsg) await oldMsg.delete().catch(() => {});
 
-      const newMsg = await channel.send({ embeds: [matchEmbed], components });
+      const newMsg = await channel.send({ embeds: [matchEmbed] });
       match.message = newMsg.id;
       manager.persistMatches();
+      await syncJoinButtons(interaction.guild, match);
       console.log('[MODAL] match box sent successfully, new msg id:', newMsg.id);
 
       await interaction.editReply({ content: `✅ Match created! You are on 🔴 Team 1.` }).catch(() => {});
@@ -2818,11 +2859,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
       if (msg) {
-        await msg.edit({
-          embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)],
-          components: buildMatchButtons(match, interaction.user.id)
-        });
+        await msg.edit({ embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)] });
       }
+      await syncJoinButtons(interaction.guild, match);
 
       await interaction.reply({ content: '🚪 You left the match!', ephemeral: true });
       await updateMatchChannel(interaction.guild, match);

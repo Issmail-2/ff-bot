@@ -221,6 +221,7 @@ function createMatch(creatorId, teamSize, channelId, mode = 'amo') {
     winnerId: null,
     loserId: null,
     message: null,
+    buttonsMessageId: null,
     joinTimeout: null
   };
   activeMatches.set(matchId, match);
