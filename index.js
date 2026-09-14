@@ -2980,17 +2980,19 @@ const adminCommands = {
       return message.reply('❌ You don\'t have permission to adjust points!');
     }
     const args = message.content.split(/\s+/);
-    if (args.length < 4) return message.reply('Usage: `!setpoints @user points type (win/loss)`');
+    if (args.length < 4) return message.reply('Usage: `!setpoints @user|userId points type (win/loss)`');
 
-    const user = message.mentions.users.first();
-    if (!user) return message.reply('❌ Please mention a user!');
+    const mentionUser = message.mentions.users.first();
+    const m = (args[1] || '').match(/\d{15,20}/);
+    const userId = (mentionUser && mentionUser.id) || (m ? m[0] : null);
+    if (!/^\d{15,20}$/.test(userId || '')) return message.reply('❌ Mention a user or provide a valid user ID!');
 
     const points = parseInt(args[2]);
     if (isNaN(points)) return message.reply('❌ Invalid points value!');
 
     const type = (args[3] || 'win').toLowerCase() === 'loss' ? 'loss' : 'win';
-    const result = storage.addPoints(user.id, points, type, mode);
-    await message.reply(`✅ Added **${points}** points to <@${user.id}>. Total: **${result.totalPoints}**`);
+    const result = storage.addPoints(userId, points, type, mode);
+    await message.reply(`✅ Added **${points}** points to <@${userId}>. Total: **${result.totalPoints}**`);
     applyRankNicknames(message.guild).catch(() => {});
     refreshCombinedLeaderboard(message.guild);
   }
@@ -3085,11 +3087,13 @@ if (content === '&applyfix' || content === '!applyfix') {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can remove points!');
     }
-    const args = content.split(/\s+/);
-    const userId = args[1];
+    const args = message.content.trim().split(/\s+/);
+    const mentionUser = message.mentions.users.first();
+    const m = (args[1] || '').match(/\d{15,20}/);
+    const userId = (mentionUser && mentionUser.id) || (m ? m[0] : null);
     const points = parseInt(args[2]);
     if (!/^\d{15,20}$/.test(userId || '')) {
-      return message.reply('Usage: `&remove <userID> <points>`');
+      return message.reply('Usage: `&remove <userID|@user> <points>`');
     }
     if (isNaN(points) || points <= 0) {
       return message.reply('❌ Invalid points amount. Usage: `&remove <userID> <points>`');
@@ -3254,12 +3258,14 @@ if (content === '&applyfix' || content === '!applyfix') {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can cancel a match!');
     }
+    const m = (message.content.match(/\d{15,20}/) || [])[0];
     const target = message.mentions.users.first();
-    if (!target) return message.reply('Usage: `!cancelgame @user`');
-    const existing = manager.getAllMatches().find(m => m.creatorId === target.id && m.mode === mode);
+    const targetId = (target && target.id) || m;
+    if (!targetId) return message.reply('Usage: `!cancelgame @user|userId`');
+    const existing = manager.getAllMatches().find(mt => mt.creatorId === targetId && mt.mode === mode);
     if (!existing) return message.reply('❌ No active match found for that user.');
     await cancelMatch(message.guild, existing, `❌ **Match cancelled by admin** (<@${message.author.id}>)`);
-    await message.reply(`❌ **Match cancelled by admin!** <@${target.id}>'s match has been cancelled.`);
+    await message.reply(`❌ **Match cancelled by admin!** <@${targetId}>'s match has been cancelled.`);
   } else if (content.startsWith('!blacklist')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can blacklist users!');
@@ -3340,11 +3346,13 @@ if (content === '&applyfix' || content === '!applyfix') {
     }
     const args = message.content.trim().split(/\s+/);
     if (args.length < 4) {
-      return message.reply('Usage: `&jail <userId> <duration> <reason>`\nDurations: `30m`, `5h`, `7d`, `2w`, `perm`');
+      return message.reply('Usage: `&jail <userId|@user> <duration> <reason>`\nDurations: `30m`, `5h`, `7d`, `2w`, `perm`');
     }
-    const userId = args[1];
-    if (!/^\d{15,20}$/.test(userId)) {
-      return message.reply('❌ Invalid user ID.');
+    const mentionUser = message.mentions.users.first();
+    const m = (args[1] || '').match(/\d{15,20}/);
+    const userId = (mentionUser && mentionUser.id) || (m ? m[0] : null);
+    if (!/^\d{15,20}$/.test(userId || '')) {
+      return message.reply('❌ Invalid user ID or mention. Usage: `&jail <userId|@user>`');
     }
     const durationMs = parseDuration(args[2]);
     if (durationMs === null) {
@@ -3363,14 +3371,20 @@ if (content === '&applyfix' || content === '!applyfix') {
     }
     const args = message.content.trim().split(/\s+/);
     if (args.length < 2) {
-      return message.reply('Usage: `&unjail <userId>`');
+      return message.reply('Usage: `&unjail <userId|@user>`');
     }
-    const entry = jailModule.unjailUser(args[1]);
+    const mentionUser = message.mentions.users.first();
+    const m = (args[1] || '').match(/\d{15,20}/);
+    const userId = (mentionUser && mentionUser.id) || (m ? m[0] : null);
+    if (!/^\d{15,20}$/.test(userId || '')) {
+      return message.reply('❌ Invalid user ID or mention. Usage: `&unjail <userId|@user>`');
+    }
+    const entry = jailModule.unjailUser(userId);
     if (!entry) return message.reply('ℹ️ That user is not jailed.');
     const role = message.guild.roles.cache.get(entry.roleId);
-    const member = await message.guild.members.fetch(args[1]).catch(() => null);
+    const member = await message.guild.members.fetch(userId).catch(() => null);
     await unjailMember(message.guild, member, role, entry.affectedChannels, entry.removedRoles);
-    await message.reply(`✅ <@${args[1]}> has been released from jail.`);
+    await message.reply(`✅ <@${userId}> has been released from jail.`);
   } else if (content.startsWith('!setranks')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can set rank nicknames!');
@@ -3413,12 +3427,14 @@ if (content === '&applyfix' || content === '!applyfix') {
       return message.reply('❌ Only supervisors/admins can force-end a match!');
     }
     const target = message.mentions.users.first();
+    const m = (message.content.match(/\d{15,20}/) || [])[0];
+    const targetId = (target && target.id) || m;
     let match = null;
-    if (target) {
-      match = manager.getAllMatches().find(m =>
-        m.status === 'full' &&
-        ((m.team1 || []).includes(target.id) || (m.team2 || []).includes(target.id))
-      ) || manager.getAllMatches().find(m => m.creatorId === target.id);
+    if (targetId) {
+      match = manager.getAllMatches().find(mt =>
+        mt.status === 'full' &&
+        ((mt.team1 || []).includes(targetId) || (mt.team2 || []).includes(targetId))
+      ) || manager.getAllMatches().find(mt => mt.creatorId === targetId);
     } else {
       match = manager.getAllMatches().find(m => m.creatorId === message.author.id && m.status === 'full')
         || manager.getAllMatches().find(m => m.status === 'full');
@@ -3449,46 +3465,48 @@ if (content === '&applyfix' || content === '!applyfix') {
       return message.reply('⚙️ **`!w` / `!l` is staff-only.**\nPlayers vote for the MVPs using the **🗳️ Vote MVP** buttons in the match room.');
     }
     const target = message.mentions.users.first();
-    if (!target) {
-      return message.reply(`Usage: \`${isWin ? '!w' : '!l'} @player\``);
+    const m = (message.content.match(/\d{15,20}/) || [])[0];
+    const targetId = (target && target.id) || m;
+    if (!targetId) {
+      return message.reply(`Usage: \`${isWin ? '!w' : '!l'} @player|userId\``);
     }
-    console.log(`[VOTE] ${message.author.id} used ${isWin ? '!w' : '!l'} target=${target.id}; roles=[${message.member ? [...message.member.roles.cache.keys()].join(', ') : 'NULL MEMBER'}]`);
+    console.log(`[VOTE] ${message.author.id} used ${isWin ? '!w' : '!l'} target=${targetId}; roles=[${message.member ? [...message.member.roles.cache.keys()].join(', ') : 'NULL MEMBER'}]`);
 
     if (canSetResult(message.member)) {
       console.log(`[VOTE] allowed: ${message.author.id} canSetResult=true, matches=[${manager.getAllMatches().map(mm => `${mm.id}:${mm.status}`).join(', ')}]`);
-      const adminMatch = manager.getAllMatches().find(m =>
-        m.status === 'full' &&
-        ((m.team1 || []).includes(target.id) || (m.team2 || []).includes(target.id))
-      ) || manager.getAllMatches().find(m => m.status === 'full');
+      const adminMatch = manager.getAllMatches().find(mt =>
+        mt.status === 'full' &&
+        ((mt.team1 || []).includes(targetId) || (mt.team2 || []).includes(targetId))
+      ) || manager.getAllMatches().find(mt => mt.status === 'full');
       if (!adminMatch) {
         return message.reply('❌ No active match found for that player.');
       }
-      const team = adminMatch.team1.includes(target.id) ? 1 : 2;
+      const team = adminMatch.team1.includes(targetId) ? 1 : 2;
       if (isWin) {
         if (adminMatch.winnerTeam) {
           return message.reply('✅ Winner is already set. Use `!l @player` to set the loser.');
         }
-        if (adminMatch.loserId === target.id) {
-          return message.reply('❌ <@' + target.id + '> is already the Loser MVP — a player can\'t be both!');
+        if (adminMatch.loserId === targetId) {
+          return message.reply('❌ <@' + targetId + '> is already the Loser MVP — a player can\'t be both!');
         }
         adminMatch.winnerTeam = team;
-        adminMatch.mvpWinnerId = target.id;
-        adminMatch.winnerId = target.id;
+        adminMatch.mvpWinnerId = targetId;
+        adminMatch.winnerId = targetId;
         adminMatch.winnerVoteSet = true;
       } else {
         if (adminMatch.loserTeam) {
           return message.reply('✅ Loser is already set. Use `!w @player` to set the winner.');
         }
-        if (adminMatch.winnerId === target.id) {
-          return message.reply('❌ <@' + target.id + '> is already the Winner MVP — a player can\'t be both!');
+        if (adminMatch.winnerId === targetId) {
+          return message.reply('❌ <@' + targetId + '> is already the Winner MVP — a player can\'t be both!');
         }
         adminMatch.loserTeam = team;
-        adminMatch.mvpLoserId = target.id;
-        adminMatch.loserId = target.id;
+        adminMatch.mvpLoserId = targetId;
+        adminMatch.loserId = targetId;
         adminMatch.loserVoteSet = true;
       }
       manager.persistMatches();
-      await message.reply(`✅ ${isWin ? '🏆 Winner' : '💪 Loser'} set by <@${message.author.id}>: <@${target.id}> (Team ${team}).`);
+      await message.reply(`✅ ${isWin ? '🏆 Winner' : '💪 Loser'} set by <@${message.author.id}>: <@${targetId}> (Team ${team}).`);
       if (adminMatch.winnerTeam && adminMatch.loserTeam) {
         await settleMatchResult(message.guild, adminMatch);
       } else {
