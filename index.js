@@ -48,10 +48,12 @@ if (!config.adminRoles) {
 if (!config.staffRoles) {
   config.staffRoles = process.env.STAFF_ROLE_IDS ? process.env.STAFF_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1537318639395545139', '1506540916519731310', '1459133371874807921', '1466082863115145441'];
 }
-const MATCH_STAFF_ROLES = ['1548338723593392198', '1537318639395545139', '1506540916519731310', '1546807156970487838'];
+const MATCH_STAFF_ROLES = ['1548338723593392198', '1537318639395545139', '1506540916519731310', '1546807156970487838', '1548350425462210570', '1549201615850971216', '1547776062400888912'];
+const DELETED_MATCH_ROLES = ['1459133371874807921'];
 if (!config.voiceExemptRoles) config.voiceExemptRoles = [...MATCH_STAFF_ROLES];
-config.matchPingRoles = [...new Set([...(config.matchPingRoles || []), ...MATCH_STAFF_ROLES])];
-config.staffRoles = [...new Set([...(config.staffRoles || []), ...MATCH_STAFF_ROLES])];
+config.voiceExemptRoles = config.voiceExemptRoles.filter(id => !DELETED_MATCH_ROLES.includes(id));
+config.matchPingRoles = [...new Set([...(config.matchPingRoles || []), ...MATCH_STAFF_ROLES])].filter(id => !DELETED_MATCH_ROLES.includes(id));
+config.staffRoles = [...new Set([...(config.staffRoles || []), ...MATCH_STAFF_ROLES])].filter(id => !DELETED_MATCH_ROLES.includes(id));
 if (!config.matchRewards) {
   config.matchRewards = { winnerMvp: 80, winner: 50, loserMvp: 30, loser: 10 };
 }
