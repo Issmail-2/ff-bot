@@ -605,49 +605,69 @@ async function archiveChannel(guild, match) {
 }
 
 async function movePlayersToVoice(guild, match, team1Channel, team2Channel) {
-  match.originalChannels = {};
-  for (const userId of match.team1) {
-    try {
-      const member = await guild.members.fetch(userId);
-      if (member.voice.channel && match.originalChannels[userId] === undefined) {
-        match.originalChannels[userId] = member.voice.channel.id;
+  match.originalChannels = match.originalChannels || {};
+  const moveTeam = async (team, teamChannel) => {
+    for (const userId of team) {
+      if (!isRealId(userId)) continue;
+      try {
+        const member = await guild.members.fetch(userId);
+        if (!member.voice || !member.voice.channel) {
+          console.log(`[VOICE] match ${match.id}: player ${userId} is not in a voice channel — skipping move to ${teamChannel.name}`);
+          continue;
+        }
+        if (match.originalChannels[userId] === undefined) {
+          match.originalChannels[userId] = member.voice.channel.id;
+        }
+        await member.voice.setChannel(teamChannel);
+      } catch (e) {
+        console.log(`[VOICE] match ${match.id}: could not move user ${userId} to ${teamChannel.name}: ${e.message}`);
       }
-      await member.voice.setChannel(team1Channel);
-    } catch (e) {
-      console.log(`Could not move user ${userId}: ${e.message}`);
     }
-  }
-  for (const userId of match.team2) {
-    try {
-      const member = await guild.members.fetch(userId);
-      if (member.voice.channel && match.originalChannels[userId] === undefined) {
-        match.originalChannels[userId] = member.voice.channel.id;
-      }
-      await member.voice.setChannel(team2Channel);
-    } catch (e) {
-      console.log(`Could not move user ${userId}: ${e.message}`);
-    }
-  }
+  };
+  await moveTeam(match.team1, team1Channel);
+  await moveTeam(match.team2, team2Channel);
+  persistMatches();
 }
 
 async function returnPlayersToOriginal(guild, match) {
-  console.log(`[RETURN] match ${match.id} originalChannels=`, JSON.stringify(match.originalChannels));
-  if (!match.originalChannels || Object.keys(match.originalChannels).length === 0) {
-    console.log('[RETURN] no originalChannels recorded, skipping teleport-back');
+  const entries = (match.originalChannels && typeof match.originalChannels === 'object')
+    ? Object.entries(match.originalChannels)
+    : [];
+  if (entries.length === 0) {
+    console.log(`[VOICE] match ${match.id}: no saved original voice channels — skipping restore`);
     return;
   }
-  for (const userId of Object.keys(match.originalChannels)) {
-    const channelId = match.originalChannels[userId];
+  let restored = 0;
+  for (const [userId, channelId] of entries) {
+    if (!isRealId(userId) || !isRealId(channelId)) continue;
+    let member = null;
     try {
-      const member = await guild.members.fetch(userId);
-      const target = guild.channels.cache.get(channelId);
-      if (target && member.voice.channel) {
-        await member.voice.setChannel(target);
-      }
+      member = await guild.members.fetch(userId);
     } catch (e) {
-      console.log(`Could not return user ${userId}: ${e.message}`);
+      console.log(`[VOICE] match ${match.id}: player ${userId} left the server / not found — skipped restore`);
+      continue;
+    }
+    if (!member.voice || !member.voice.channel) {
+      console.log(`[VOICE] match ${match.id}: player ${userId} is offline/not connected — not moved (saved original ${channelId})`);
+      continue;
+    }
+    const target = guild.channels.cache.get(channelId);
+    if (!target || target.type !== ChannelType.GuildVoice) {
+      console.log(`[VOICE] match ${match.id}: original voice channel ${channelId} for ${userId} no longer exists — nothing to restore`);
+      continue;
+    }
+    if (member.voice.channel.id === channelId) {
+      restored++;
+      continue;
+    }
+    try {
+      await member.voice.setChannel(target);
+      restored++;
+    } catch (e) {
+      console.log(`[VOICE] match ${match.id}: could not return player ${userId} to ${channelId} (inaccessible?) — ${e.message}`);
     }
   }
+  console.log(`[VOICE] match ${match.id}: restored ${restored}/${entries.length} player(s) to their original voice channels`);
 }
 
 async function finishMatch(guild, match) {
@@ -669,6 +689,7 @@ async function deleteVoiceChannels(guild, match) {
     }
     match.voiceChannels = [];
     match.usePool = false;
+    match.originalChannels = {};
     return;
   }
 
@@ -681,6 +702,7 @@ async function deleteVoiceChannels(guild, match) {
     }
   }
   match.voiceChannels = [];
+  match.originalChannels = {};
 }
 
 function removeMatch(matchId) {
@@ -712,8 +734,20 @@ function getPendingOrFullMatch(mode) {
   return candidates[0] || null;
 }
 
-function clearAllMatches() {
-  const count = getAllMatches().length;
+async function clearAllMatches(guild) {
+  const matches = getAllMatches();
+  if (guild) {
+    for (const match of matches) {
+      try {
+        await returnPlayersToOriginal(guild, match);
+        await deleteVoiceChannels(guild, match);
+        await deleteChannel(guild, match);
+      } catch (e) {
+        console.log(`[CLEAR] cleanup of match ${match.id} failed: ${e.message}`);
+      }
+    }
+  }
+  const count = matches.length;
   activeMatches.clear();
   persistMatches();
   return count;

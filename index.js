@@ -3294,7 +3294,7 @@ if (content === '&applyfix' || content === '!applyfix') {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can clear stuck matches!');
     }
-    const cleared = manager.clearAllMatches();
+    const cleared = await manager.clearAllMatches(message.guild);
     await message.reply(`🧹 Cleared **${cleared}** stuck match(es)!`);
   } else if (content.startsWith('!cancelgame')) {
     if (!hasCommandAccess(message.member)) {
