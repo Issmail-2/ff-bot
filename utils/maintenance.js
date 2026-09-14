@@ -102,6 +102,7 @@ function detectCategory(record) {
   if (/jail|blacklist|matchmanager|cheaterreports|settings|store|storage/i.test(record.stack || '')) return 'internal-state';
   if (/disconnect|shard.*(close|resume|ready)/i.test(low)) return 'ws-disconnect';
   if (low.includes('token') && /invalid token/i.test(m)) return 'auth-config';
+  if (/unowned team voice|stuck in|voice sweep|voice violation/i.test(low)) return 'voice-conflict';
   return 'unclassified';
 }
 
@@ -116,6 +117,7 @@ const DIAGNOSIS = {
   'ws-disconnect': { problem: 'Gateway/shard disconnected.', cause: 'Network instability or Discord reconnect.', affectedSystem: 'Gateway', severity: 'high', recommendedFix: 'Verify bot reconnected; if not ready soon, request a safe reconnect.', risk: 'high', needsApproval: true, autoFixKey: 'reconnect-bot' },
   'auth-config': { problem: 'Invalid bot token detected.', cause: 'Wrong or expired token in configuration.', affectedSystem: 'Authentication', severity: 'critical', recommendedFix: 'Rotate/update DISCORD_TOKEN (never expose it).', risk: 'high', needsApproval: true },
   'internal-state': { problem: 'Internal state (matches/jails/points/settings) reported an error.', cause: 'Corrupted or inconsistent state file or in-memory data.', affectedSystem: 'Match / state system', severity: 'medium', recommendedFix: 'Validate and repair match state from the last good backup.', risk: 'low', autoFixKey: 'revalidate-matches' },
+  'voice-conflict': { problem: 'Voice conflict detected — players may be stuck in temporary team channels.', cause: 'Interrupted match teardown or conflict between the match voice system and temporary voice automation.', affectedSystem: 'Temporary match voice channels', severity: 'high', recommendedFix: 'Run voice recovery: resume interrupted teardowns, restore stuck players to their saved original channels, clean orphaned team channels.', risk: 'low', autoFixKey: 'recover-stuck-players' },
   'unclassified': { problem: 'Unexpected bot error.', cause: 'Unknown — requires analysis.', affectedSystem: 'Unknown', severity: 'medium', recommendedFix: 'Inspect the maintenance log; do not auto-rewrite code.', risk: 'low' }
 };
 
@@ -511,6 +513,7 @@ module.exports = {
   suppressUntil,
   setSuppression,
   runFix,
+  log: logEntry,
   _redact: redact,
   _state: state
 };

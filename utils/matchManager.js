@@ -20,11 +20,39 @@ const activeMatches = new Map();
 const MATCHES_FILE = path.resolve(__dirname, '..', 'data', 'matches.json');
 const LOGS_FILE = path.resolve(__dirname, '..', 'data', 'matches_log.json');
 const suppressedUsers = new Set();
+const restoringPlayers = new Map();
 const VOICE_POOL_SIZE = parseInt(process.env.VOICE_POOL_SIZE || '0') || (config.voicePoolSize || 5);
 const voicePool = new Map();
 
 function isRealId(id) {
   return typeof id === 'string' && /^\d{15,20}$/.test(id);
+}
+
+function isRestoring(userId) {
+  return userId !== undefined && userId !== null && restoringPlayers.has(String(userId));
+}
+
+function beginRestore(match) {
+  for (const userId of Object.keys(match.originalChannels || {})) {
+    restoringPlayers.set(String(userId), match.id);
+  }
+}
+
+function endRestore(match) {
+  for (const userId of Object.keys(match.originalChannels || {})) {
+    if (restoringPlayers.get(String(userId)) === match.id) restoringPlayers.delete(String(userId));
+  }
+}
+
+function endRestoreUser(match, userId) {
+  if (restoringPlayers.get(String(userId)) === match.id) restoringPlayers.delete(String(userId));
+}
+
+function clearOriginalChannel(match, userId) {
+  if (match.originalChannels && typeof match.originalChannels === 'object' && match.originalChannels[userId] !== undefined) {
+    delete match.originalChannels[userId];
+    persistMatches();
+  }
 }
 
 function ensureLogsFile() {
@@ -89,6 +117,8 @@ function validateMatch(match) {
   }
   match.voiceChannels = Array.isArray(match.voiceChannels) ? match.voiceChannels : [];
   match.originalChannels = (match.originalChannels && typeof match.originalChannels === 'object') ? match.originalChannels : {};
+  const PHASES = [null, 'CANCELLING', 'CANCELLED', 'FINISHING', 'FINISHED'];
+  if (!PHASES.includes(match.phase)) match.phase = null;
   match.winnerVotes = (match.winnerVotes && typeof match.winnerVotes === 'object') ? match.winnerVotes : {};
   match.loserVotes = (match.loserVotes && typeof match.loserVotes === 'object') ? match.loserVotes : {};
   match.cancelVotes = (match.cancelVotes && typeof match.cancelVotes === 'object') ? match.cancelVotes : { 1: [], 2: [] };
@@ -222,6 +252,7 @@ function createMatch(creatorId, teamSize, channelId, mode = 'amo') {
     loserId: null,
     message: null,
     buttonsMessageId: null,
+    phase: null,
     joinTimeout: null
   };
   activeMatches.set(matchId, match);
@@ -446,9 +477,15 @@ async function deactivatePoolChannel(guild, channelId) {
 
 async function createVoiceChannels(guild, match) {
   if (match.voiceChannels && match.voiceChannels.length === 2) {
-    const t1 = guild.channels.cache.get(match.voiceChannels[0]);
-    const t2 = guild.channels.cache.get(match.voiceChannels[1]);
-    if (t1 && t2) return { team1Channel: t1, team2Channel: t2 };
+    const t1 = await resolveChannel(guild, match.voiceChannels[0]);
+    const t2 = await resolveChannel(guild, match.voiceChannels[1]);
+    if (t1 && t1.type === ChannelType.GuildVoice && t2 && t2.type === ChannelType.GuildVoice) {
+      if (match.usePool) await activatePoolChannels(guild, match, t1, t2);
+      return { team1Channel: t1, team2Channel: t2 };
+    }
+    console.log(`[VOICE] match ${match.id}: recorded team channels stale (${match.voiceChannels.join(', ')}) — recreating pair`);
+    match.voiceChannels = [];
+    match.usePool = false;
   }
 
   const mode = match.mode || 'amo';
@@ -635,47 +672,137 @@ async function returnPlayersToOriginal(guild, match) {
     : [];
   if (entries.length === 0) {
     console.log(`[VOICE] match ${match.id}: no saved original voice channels — skipping restore`);
-    return;
+    return { total: 0, restored: 0, skipped: 0, stuck: [] };
   }
+  beginRestore(match);
   let restored = 0;
-  for (const [userId, channelId] of entries) {
-    if (!isRealId(userId) || !isRealId(channelId)) continue;
-    let member = null;
+  const skipped = [];
+  const stuck = [];
+  try {
+    for (const [userId, channelId] of entries) {
+      if (!isRealId(userId) || !isRealId(channelId)) continue;
+      let member = null;
+      try {
+        member = await guild.members.fetch(userId);
+      } catch (e) {
+        console.log(`[VOICE] match ${match.id}: player ${userId} left the server / not found — skipped restore`);
+        skipped.push(userId);
+        continue;
+      }
+      if (!member.voice || !member.voice.channel) {
+        console.log(`[VOICE] match ${match.id}: player ${userId} is offline/not connected — not moved (saved original ${channelId})`);
+        skipped.push(userId);
+        continue;
+      }
+      const target = guild.channels.cache.get(channelId);
+      if (!target || target.type !== ChannelType.GuildVoice) {
+        console.log(`[VOICE] match ${match.id}: original voice channel ${channelId} for ${userId} no longer exists — nothing to restore`);
+        skipped.push(userId);
+        continue;
+      }
+      if (member.voice.channel.id === channelId) {
+        restored++;
+        continue;
+      }
+      try {
+        await member.voice.setChannel(target);
+        restored++;
+      } catch (e) {
+        console.log(`[VOICE] match ${match.id}: could not return player ${userId} to ${channelId} (inaccessible?) — ${e.message}`);
+        stuck.push(userId);
+      }
+    }
+  } finally {
+    endRestore(match);
+  }
+  const result = { total: entries.length, restored, skipped: skipped.length, stuck };
+  console.log(`[VOICE] match ${match.id}: restored ${restored}/${entries.length} player(s) to their original voice channels (skipped ${skipped.length}, stuck ${stuck.length})`);
+  return result;
+}
+
+async function restorePlayerVoice(guild, match, userId) {
+  if (!match.originalChannels || match.originalChannels[userId] === undefined) {
+    console.log(`[VOICE] match ${match.id}: no saved original voice channel for ${userId}`);
+    return { ok: false, reason: 'no-saved-original' };
+  }
+  const channelId = match.originalChannels[userId];
+  restoringPlayers.set(String(userId), match.id);
+  try {
+    let member;
     try {
       member = await guild.members.fetch(userId);
     } catch (e) {
-      console.log(`[VOICE] match ${match.id}: player ${userId} left the server / not found — skipped restore`);
-      continue;
+      console.log(`[VOICE] match ${match.id}: cannot restore ${userId} — player not found / left server`);
+      return { ok: false, reason: 'player-not-found' };
     }
     if (!member.voice || !member.voice.channel) {
-      console.log(`[VOICE] match ${match.id}: player ${userId} is offline/not connected — not moved (saved original ${channelId})`);
-      continue;
+      console.log(`[VOICE] match ${match.id}: ${userId} offline/not connected — nothing to restore`);
+      return { ok: true, reason: 'not-connected' };
     }
     const target = guild.channels.cache.get(channelId);
     if (!target || target.type !== ChannelType.GuildVoice) {
-      console.log(`[VOICE] match ${match.id}: original voice channel ${channelId} for ${userId} no longer exists — nothing to restore`);
-      continue;
+      console.log(`[VOICE] match ${match.id}: original channel ${channelId} for ${userId} no longer exists`);
+      return { ok: false, reason: 'channel-missing' };
     }
-    if (member.voice.channel.id === channelId) {
-      restored++;
-      continue;
-    }
+    if (member.voice.channel.id === channelId) return { ok: true, reason: 'already-there' };
+    await member.voice.setChannel(target);
+    return { ok: true };
+  } catch (e) {
+    console.log(`[VOICE] match ${match.id}: could not restore ${userId} to ${channelId}: ${e.message}`);
+    return { ok: false, reason: e.message };
+  }
+}
+
+async function verifyRestore(guild, match) {
+  const entries = Object.entries(match.originalChannels || {});
+  let verified = 0;
+  let skipped = 0;
+  const stuck = [];
+  for (const [userId, channelId] of entries) {
     try {
-      await member.voice.setChannel(target);
-      restored++;
+      const member = await guild.members.fetch(userId);
+      if (!member.voice || !member.voice.channel) {
+        skipped++;
+        continue;
+      }
+      if (member.voice.channel.id === channelId) verified++;
+      else stuck.push(userId);
     } catch (e) {
-      console.log(`[VOICE] match ${match.id}: could not return player ${userId} to ${channelId} (inaccessible?) — ${e.message}`);
+      skipped++;
     }
   }
-  console.log(`[VOICE] match ${match.id}: restored ${restored}/${entries.length} player(s) to their original voice channels`);
+  console.log(`[VOICE] verify match ${match.id}: ${verified}/${entries.length} in original channels (${skipped} skipped, ${stuck.length} stuck)`);
+  return { total: entries.length, verified, skipped, stuck };
+}
+
+function findMatchByVoiceChannel(channelId) {
+  for (const match of activeMatches.values()) {
+    if ((match.voiceChannels || []).includes(channelId)) return match;
+  }
+  return null;
+}
+
+async function resolveChannel(guild, channelId) {
+  let ch = null;
+  try { ch = guild.channels.cache.get(channelId); } catch (e) { /* ignore */ }
+  if (!ch) {
+    try { ch = await guild.channels.fetch(channelId).catch(() => null); } catch (e) { ch = null; }
+  }
+  return ch;
 }
 
 async function finishMatch(guild, match) {
   match.closing = true;
-  await returnPlayersToOriginal(guild, match);
+  match.phase = 'FINISHING';
+  persistMatches();
+  const restored = await returnPlayersToOriginal(guild, match);
+  await verifyRestore(guild, match).catch(() => {});
   await deleteVoiceChannels(guild, match);
   await deleteChannel(guild, match);
+  match.phase = 'FINISHED';
+  match.closing = false;
   removeMatch(match.id);
+  console.log(`[VOICE] match ${match.id} finished — restored ${restored.restored}/${restored.total}, channels cleaned up`);
 }
 
 async function deleteVoiceChannels(guild, match) {
@@ -690,6 +817,7 @@ async function deleteVoiceChannels(guild, match) {
     match.voiceChannels = [];
     match.usePool = false;
     match.originalChannels = {};
+    endRestore(match);
     return;
   }
 
@@ -703,6 +831,7 @@ async function deleteVoiceChannels(guild, match) {
   }
   match.voiceChannels = [];
   match.originalChannels = {};
+  endRestore(match);
 }
 
 function removeMatch(matchId) {
@@ -779,6 +908,14 @@ module.exports = {
   archiveChannel,
   movePlayersToVoice,
   returnPlayersToOriginal,
+  restorePlayerVoice,
+  verifyRestore,
+  beginRestore,
+  endRestore,
+  endRestoreUser,
+  isRestoring,
+  clearOriginalChannel,
+  findMatchByVoiceChannel,
   finishMatch,
   deleteVoiceChannels,
   removeMatch,

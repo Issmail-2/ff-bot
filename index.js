@@ -714,9 +714,20 @@ async function updateMatchChannel(guild, match) {
 }
 
 async function cancelMatch(guild, match, cancelText) {
-  await manager.returnPlayersToOriginal(guild, match).catch(() => {});
+  if (match.phase === 'CANCELLED') {
+    await manager.deleteVoiceChannels(guild, match).catch(() => {});
+    await manager.deleteChannel(guild, match).catch(() => {});
+    manager.removeMatch(match.id);
+    return;
+  }
+  match.closing = true;
+  match.phase = 'CANCELLING';
+  manager.persistMatches();
+  const restored = await manager.returnPlayersToOriginal(guild, match).catch(() => null);
+  if (restored) await manager.verifyRestore(guild, match).catch(() => {});
   await manager.deleteVoiceChannels(guild, match).catch(() => {});
   await manager.deleteChannel(guild, match).catch(() => {});
+  match.phase = 'CANCELLED';
   if (match.joinTimeout) { clearTimeout(match.joinTimeout); match.joinTimeout = null; }
   if (match.configTimeout) { clearTimeout(match.configTimeout); match.configTimeout = null; }
   const baseChannel = guild.channels.cache.get(match.channelId);
@@ -737,6 +748,7 @@ async function cancelMatch(guild, match, cancelText) {
     }
   }
   manager.removeMatch(match.id);
+  console.log(`[VOICE] match ${match.id} cancelled — players restored, team channels cleaned up`);
 }
 
 const CANCEL_NEEDED = 2;
@@ -915,17 +927,8 @@ async function startFullMatch(guild, match) {
 }
 
 function buildTeamSelectEmbed(match) {
-  const t1 = `${config.emojis.team1} **TEAM 1** — \`${match.team1.length}/${match.teamSize}\``;
-  const t2 = `${config.emojis.team2} **TEAM 2** — \`${match.team2.length}/${match.teamSize}\``;
   return new EmbedBuilder()
-    .setTitle('🎮 TEAM SELECTION')
-    .setColor('#2B2D31')
-    .setDescription(`Choose your side for this **${match.teamSize}v${match.teamSize}** match.`)
-    .addFields(
-      { name: '🔴 TEAM 1', value: t1, inline: true },
-      { name: '🟢 TEAM 2', value: t2, inline: true }
-    )
-    .setFooter({ text: BRANDING });
+    .setColor('#2B2D31');
 }
 
 function buildMatchButtons(match, userId) {
@@ -952,7 +955,7 @@ function buildMatchButtons(match, userId) {
     buttons.push(
       new ButtonBuilder()
         .setCustomId(`cancel_${match.id}`)
-        .setLabel('Cancel Game')
+        .setLabel('Cancel Match')
         .setStyle(ButtonStyle.Danger)
     );
   }
@@ -2030,6 +2033,61 @@ async function syncInviteCache(guild) {
   return map;
 }
 
+async function cleanupOrphanTeamChannels(guild) {
+  if (!guild) return;
+  const cat = config.roomCategoryId || '1545316338145165332';
+  const teamChannels = guild.channels.cache.filter(c =>
+    c.parentId === cat &&
+    c.type === ChannelType.GuildVoice &&
+    /^[🟢🔴]\s*Team\s*[12]\s*-\s*\d/.test(c.name)
+  );
+  for (const ch of teamChannels.values()) {
+    if (manager.findMatchByVoiceChannel(ch.id)) continue;
+    if (ch.members.size > 0) {
+      console.log(`[VOICE] orphan team channel ${ch.id} (${ch.name}) still has ${ch.members.size} member(s) — kept and logged`);
+      maintenance.record('stuckInVoice', new Error(`Orphan team voice ${ch.name} (${ch.id}) still has ${ch.members.size} member(s) after cancel/finish`), { source: 'voice-sweep' });
+      continue;
+    }
+    try {
+      await ch.delete('Orphaned team voice channel (match cancelled/finished)');
+      console.log(`[VOICE] deleted orphan team channel ${ch.id} (${ch.name})`);
+      maintenance.log({ ts: new Date().toISOString(), level: 'info', component: 'voice', severity: 'low', type: 'cleanup', problem: 'Orphaned team voice channel found after match cancel/finish.', cause: null, affectedSystem: 'Temporary voice channels', recommendedFix: null, risk: 'low', actionTaken: `Deleted empty orphan team channel ${ch.id} (${ch.name})`, result: 'ok', autoFixed: true, needsApproval: false });
+    } catch (e) {
+      console.log(`[VOICE] could not delete orphan ${ch.id}: ${e.message}`);
+    }
+  }
+}
+
+async function resumeInterruptedTeardowns(guild) {
+  for (const m of manager.getAllMatches()) {
+    try {
+      if (m.phase === 'CANCELLING' || m.phase === 'CANCELLED') {
+        console.log(`[RESTART] resuming cancelled-match cleanup for ${m.id} (phase=${m.phase})`);
+        await cancelMatch(guild, m, `🧹 **Match cleanup resumed after a bot restart.**`).catch(() => {});
+      } else if (m.phase === 'FINISHING' || m.phase === 'FINISHED') {
+        console.log(`[RESTART] resuming finished-match cleanup for ${m.id} (phase=${m.phase})`);
+        await manager.finishMatch(guild, m).catch(() => {});
+      }
+    } catch (e) {
+      console.log(`[RESTART] cleanup resume error for ${m.id}: ${e.message}`);
+    }
+  }
+}
+
+async function detectStuckVoicePlayers(guild) {
+  const cat = config.roomCategoryId || '1545316338145165332';
+  const owners = [];
+  for (const m of manager.getAllMatches()) {
+    for (const chId of (m.voiceChannels || [])) owners.push(chId);
+  }
+  const teamChannels = guild.channels.cache.filter(c => c.parentId === cat && c.type === ChannelType.GuildVoice && /^[🟢🔴]\s*Team\s*[12]\s*/.test(c.name));
+  for (const ch of teamChannels.values()) {
+    if (ch.members.size === 0) continue;
+    if (owners.includes(ch.id)) continue;
+    maintenance.record('stuckInVoice', new Error(`Players remain in unowned team voice ${ch.id} (${ch.name}): ${[...ch.members.keys()].join(',')}`), { source: 'voice-sweep' });
+  }
+}
+
 client.once(Events.ClientReady, async (c) => {
   console.log(`✅ Logged in as ${c.user.tag}!`);
   for (const mode of ['amo', 'esport']) {
@@ -2083,7 +2141,29 @@ client.once(Events.ClientReady, async (c) => {
       } catch (e) { console.log(`[POOL] ${mode} init error:`, e.message); }
     }
   }
+
+  for (const g of c.guilds.cache.values()) {
+    try { await resumeInterruptedTeardowns(g); } catch (e) { console.log('[RESTART] resume error:', e.message); }
+  }
+
+  setTimeout(() => {
+    for (const g of c.guilds.cache.values()) {
+      try { cleanupOrphanTeamChannels(g); } catch (e) { console.log('[VOICE] orphan cleanup error:', e.message); }
+    }
+  }, 8000);
 });
+
+setInterval(async () => {
+  try {
+    for (const g of client.guilds.cache.values()) {
+      try { await resumeInterruptedTeardowns(g); } catch (e) { /* handled */ }
+      try { await detectStuckVoicePlayers(g); } catch (e) { /* handled */ }
+      try { await cleanupOrphanTeamChannels(g); } catch (e) { /* handled */ }
+    }
+  } catch (e) {
+    console.log('[VOICE] sweep error:', e.message);
+  }
+}, 5 * 60 * 1000);
 
 setInterval(async () => {
   const now = Date.now();
@@ -2889,15 +2969,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (action === 'leave') {
       if (match.status === 'full') {
-        return interaction.reply({ content: '❌ The match has started! You can only leave by using **Cancel Match** or an admin action.', ephemeral: true });
+        const teamSizeNow = match.team1.length + match.team2.length;
+        if (teamSizeNow <= 2) {
+          return interaction.reply({ content: '❌ You are one of the last players in the match — use the cancel option instead of leaving.', ephemeral: true });
+        }
+        const restored = await manager.restorePlayerVoice(interaction.guild, match, interaction.user.id);
+        const result = manager.leaveMatch(matchId, interaction.user.id, { force: true });
+        manager.endRestoreUser(match, interaction.user.id);
+        if (!result.success) {
+          return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
+        }
+        manager.clearOriginalChannel(match, interaction.user.id);
+
+        const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
+        if (msg) {
+          await msg.edit({ embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)] });
+        }
+        await updateMatchChannel(interaction.guild, match);
+        return interaction.reply({
+          content: (restored && restored.ok)
+            ? '🚪 You left the match and were moved back to your original voice channel!'
+            : '🚪 You left the match!',
+          ephemeral: true
+        });
       }
       if (match.creatorId === interaction.user.id) {
-        return interaction.reply({ content: '❌ The match host cannot leave! Use **Cancel Game** to close the room.', ephemeral: true });
+        return interaction.reply({ content: '❌ The match host cannot leave! Use **Cancel Match** to close the room.', ephemeral: true });
       }
       const result = manager.leaveMatch(matchId, interaction.user.id);
       if (!result.success) {
         return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
       }
+      if (match.originalChannels && match.originalChannels[interaction.user.id]) {
+        await manager.restorePlayerVoice(interaction.guild, match, interaction.user.id);
+        manager.clearOriginalChannel(match, interaction.user.id);
+      }
+      manager.endRestoreUser(match, interaction.user.id);
 
       const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
       if (msg) {
@@ -3694,8 +3801,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   if (!member || member.user.bot) return;
   if (member.roles.cache.has('1546807156970487838')) return;
   if (manager.isSuppressed(member.id)) return;
+  if (manager.isRestoring(member.id)) return;
   const match = manager.getActiveMatchForPlayer(member.id);
   if (!match || match.closing) return;
+  if (match.phase === 'CANCELLING' || match.phase === 'CANCELLED' || match.phase === 'FINISHING' || match.phase === 'FINISHED') return;
 
   const teamIdx = (match.team1 || []).includes(member.id) ? 0 : 1;
   const targetVoice = match.voiceChannels && match.voiceChannels[teamIdx];
@@ -3765,13 +3874,37 @@ maintenance.init({
     'rate-limit-pause': async () => {
       maintenance.setSuppression(60000);
       return { ok: true, result: 'Paused heavy periodic syncs for 60s while Discord cools down.' };
+    },
+    'resume-pending-teardowns': async () => {
+      let resumed = 0;
+      for (const g of client.guilds.cache.values()) {
+        const before = manager.getAllMatches().filter(m => m.phase === 'CANCELLING' || m.phase === 'CANCELLED' || m.phase === 'FINISHING' || m.phase === 'FINISHED').length;
+        try { await resumeInterruptedTeardowns(g); } catch (e) { /* best-effort */ }
+        const after = manager.getAllMatches().filter(m => m.phase === 'CANCELLING' || m.phase === 'CANCELLED' || m.phase === 'FINISHING' || m.phase === 'FINISHED').length;
+        resumed += (before - after);
+        try { await cleanupOrphanTeamChannels(g); } catch (e) { /* best-effort */ }
+      }
+      return { ok: true, result: `Resumed ${resumed} interrupted teardown(s) and cleaned orphaned team channels.` };
+    },
+    'recover-stuck-players': async () => {
+      let recovered = 0;
+      for (const g of client.guilds.cache.values()) {
+        for (const m of manager.getAllMatches()) {
+          if (m.phase !== 'CANCELLING' && m.phase !== 'CANCELLED' && m.phase !== 'FINISHING' && m.phase !== 'FINISHED') continue;
+          const r = await manager.returnPlayersToOriginal(g, m).catch(() => null);
+          if (r) recovered += r.restored;
+        }
+      }
+      return { ok: true, result: `Recovery pass finished; restored ${recovered} player(s) from cancelled/ended matches.` };
     }
   },
   verifiers: {
     'repost-commands': async () => 'Commands message posted successfully.',
     're-ensure-channels': async () => 'Channel structures verified.',
     'revalidate-matches': async (r) => (r && r.ok) ? true : 'State still inconsistent.',
-    'rate-limit-pause': async () => true
+    'rate-limit-pause': async () => true,
+    'resume-pending-teardowns': async () => 'No pending teardown matches remain; orphan channels cleaned.',
+    'recover-stuck-players': async () => 'Stuck players restored or safely skipped.'
   }
 });
 maintenance.start();
