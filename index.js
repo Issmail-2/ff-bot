@@ -920,6 +920,10 @@ function buildMatchButtons(match, userId) {
   return [row];
 }
 
+function joinButtonsBox(match) {
+  return `\`\`\`\n🎮 JOIN OPTIONS  •  ${match.teamSize}v${match.teamSize}\n\`\`\``;
+}
+
 async function syncJoinButtons(guild, match) {
   const channel = guild.channels.cache.get(match.channelId);
   if (!channel) return null;
@@ -929,10 +933,10 @@ async function syncJoinButtons(guild, match) {
     btnMsg = await channel.messages.fetch(match.buttonsMessageId).catch(() => null);
   }
   if (btnMsg) {
-    await btnMsg.edit({ components }).catch(() => {});
+    await btnMsg.edit({ content: joinButtonsBox(match), components }).catch(() => {});
     return btnMsg;
   }
-  const sent = await channel.send({ components }).catch(() => null);
+  const sent = await channel.send({ content: joinButtonsBox(match), components }).catch(() => null);
   if (sent) {
     match.buttonsMessageId = sent.id;
     manager.persistMatches();
