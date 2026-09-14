@@ -48,6 +48,10 @@ if (!config.adminRoles) {
 if (!config.staffRoles) {
   config.staffRoles = process.env.STAFF_ROLE_IDS ? process.env.STAFF_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1537318639395545139', '1506540916519731310', '1459133371874807921', '1466082863115145441'];
 }
+const MATCH_STAFF_ROLES = ['1548338723593392198', '1537318639395545139', '1506540916519731310', '1546807156970487838'];
+if (!config.voiceExemptRoles) config.voiceExemptRoles = [...MATCH_STAFF_ROLES];
+config.matchPingRoles = [...new Set([...(config.matchPingRoles || []), ...MATCH_STAFF_ROLES])];
+config.staffRoles = [...new Set([...(config.staffRoles || []), ...MATCH_STAFF_ROLES])];
 if (!config.matchRewards) {
   config.matchRewards = { winnerMvp: 80, winner: 50, loserMvp: 30, loser: 10 };
 }
@@ -3794,7 +3798,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   try {
   const member = oldState.member || newState.member;
   if (!member || member.user.bot) return;
-  if (member.roles.cache.has('1546807156970487838')) return;
+  const voiceExemptRoles = config.voiceExemptRoles || [];
+  if (voiceExemptRoles.some(rid => member.roles.cache.has(rid))) return;
   if (manager.isSuppressed(member.id)) return;
   if (manager.isRestoring(member.id)) return;
   const match = manager.getActiveMatchForPlayer(member.id);
@@ -3823,12 +3828,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   match.voiceViolations = match.voiceViolations || {};
   match.voiceViolations[member.id] = (match.voiceViolations[member.id] || 0) + 1;
   const count = match.voiceViolations[member.id];
-  const leftOf = 3 - count;
   manager.persistMatches();
 
   const action = leftVoice ? 'left the match voice' : `switched to another voice channel (pulled back to <#${targetVoice}>)`;
   console.log(`[VOICE] ${member.id} ${action} -> violation ${count}/3`);
-  await member.send(`⚠️ **Voice Warning (${count}/3)** — you ${action} during an active match!${leftOf > 0 ? ` ${leftOf} more time(s) and you will be **blacklisted for 30 minutes**.` : ''}`).catch(() => {});
   const room = member.guild.channels.cache.get(match.channelId2);
   if (room) room.send(`⚠️ <@${member.id}> ${action} (**${count}/3**).`).catch(() => {});
   if (count >= 3) {
