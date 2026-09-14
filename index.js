@@ -327,7 +327,7 @@ const COMMANDS_INFO = `🎮 **HOW TO PLAY — FREE FIRE MATCHES**
 ━━━━━━━━━━━━━━━━━━━━━━━━
 1️⃣ Join a **lobby voice channel**.
 2️⃣ Type \`!play 2v2\`, \`!play 3v3\` or \`!play 4v4\` in the matches channel (\`!esport …\` in the esport channel).
-3️⃣ Click **🏠 Room Config** and enter the Room ID / Password (optional room name also supported).
+3️⃣ Click **🏠 Room Config** and enter the Room ID / Password (numbers only).
 4️⃣ Players join **Team 1 / Team 2** — if the host set a join key you'll be asked for it. Once both teams are full the roster **locks**.
 5️⃣ A **result box** appears — the 2 team captains vote the **MVP** for the winning and losing side.
 6️⃣ Points are awarded automatically: Winner **+50**, Winner MVP **+80**, Loser **+10**, Loser MVP **+30**.
@@ -2425,19 +2425,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const roomId = interaction.fields.getTextInputValue('roomIdInput').trim();
     const password = interaction.fields.getTextInputValue('passwordInput').trim();
     const matchKey = interaction.fields.getTextInputValue('keyInput').trim();
-    const roomName = interaction.fields.getTextInputValue('roomNameInput').trim();
 
     if (![2, 3, 4].includes(match.teamSize)) {
       console.log('[MODAL] invalid team size on match', match.teamSize);
       return interaction.editReply({ content: '❌ Invalid team size. Start the match with `!play 2v2/3v3/4v4`!' });
     }
 
+    const invalidFields = [];
+    if (!/^\d+$/.test(roomId)) invalidFields.push('Room ID');
+    if (!/^\d+$/.test(password)) invalidFields.push('Room Password');
+    if (matchKey && !/^\d+$/.test(matchKey)) invalidFields.push('Join Key');
+    if (invalidFields.length) {
+      console.log(`[MODAL] non-numeric input rejected: ${invalidFields.join(', ')}`);
+      return interaction.editReply({ content: `❌ **Only numbers!** ${invalidFields.join(', ')} must contain numbers only.` });
+    }
+
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
-    match.roomName = roomName;
     match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} roomName=${roomName} creator auto-joined T1`);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
 
     try {
       const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
@@ -2685,16 +2692,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row3 = new ActionRowBuilder().addComponents(keyInput);
 
-      const roomNameInput = new TextInputBuilder()
-        .setCustomId('roomNameInput')
-        .setLabel('Room Name (Optional)')
-        .setPlaceholder('Optional - e.g. FF Match Room')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false);
-
-      const row4 = new ActionRowBuilder().addComponents(roomNameInput);
-
-      roomModal.addComponents(row1, row2, row3, row4);
+      roomModal.addComponents(row1, row2, row3);
 
       if (match.configTimeout) clearTimeout(match.configTimeout);
       match.configTimeout = setTimeout(() => {
