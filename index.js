@@ -656,20 +656,18 @@ function teamPanel(ids, matchMode, size, guild) {
 }
 
 function buildMatchBoxEmbed(guild, match, creatorUser) {
-  const list = (ids) => {
-    if (!ids || ids.length === 0) return '`Empty`';
-    return ids.map(id => `<@${id}>`).join('\n');
-  };
-  const t1 = list(match.team1);
-  const t2 = list(match.team2);
+  const mode = match.mode || 'amo';
+  const size = match.teamSize || 2;
+  const t1Field = teamPanel(match.team1, mode, size, guild);
+  const t2Field = teamPanel(match.team2, mode, size, guild);
 
   const embed = new EmbedBuilder()
-    .setTitle(`👾 __Free Fire ${match.teamSize}v${match.teamSize} Match__`)
-    .setColor('#2F3136')
-    .setDescription(`Match started by <@${match.creatorId}>`)
+    .setTitle('🎮 TEAM SELECTION')
+    .setColor('#2B2D31')
+    .setDescription(`Choose your team for this **${match.teamSize}v${match.teamSize}** match.`)
     .addFields(
-      { name: `🔴 Team 1 (${match.team1.length}/${match.teamSize})`, value: t1, inline: false },
-      { name: `🟢 Team 2 (${match.team2.length}/${match.teamSize})`, value: t2, inline: false }
+      { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: t1Field || '*Empty*', inline: true },
+      { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field || '*Empty*', inline: true }
     )
     .setFooter({ text: BRANDING });
 
@@ -926,22 +924,6 @@ async function startFullMatch(guild, match) {
   return { team1Channel, team2Channel, roomChannel };
 }
 
-function buildTeamSelectEmbed(match, guild) {
-  const mode = match.mode || 'amo';
-  const size = match.teamSize || 2;
-  const t1Field = teamPanel(match.team1, mode, size, guild);
-  const t2Field = teamPanel(match.team2, mode, size, guild);
-  return new EmbedBuilder()
-    .setTitle('🎮 TEAM SELECTION')
-    .setColor('#2B2D31')
-    .setDescription(`Choose your team for this **${match.teamSize}v${match.teamSize}** match.`)
-    .addFields(
-      { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: t1Field || '*Empty*', inline: true },
-      { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field || '*Empty*', inline: true }
-    )
-    .setFooter({ text: BRANDING });
-}
-
 function buildMatchButtons(match, userId) {
   const joinTeam1 = new ButtonBuilder()
     .setCustomId(`join1_${match.id}`)
@@ -979,16 +961,15 @@ async function syncJoinButtons(guild, match) {
   const channel = guild.channels.cache.get(match.channelId);
   if (!channel) return null;
   const components = buildMatchButtons(match, client.user.id);
-  const embed = buildTeamSelectEmbed(match, guild);
   let btnMsg = null;
   if (match.buttonsMessageId) {
     btnMsg = await channel.messages.fetch(match.buttonsMessageId).catch(() => null);
   }
   if (btnMsg) {
-    await btnMsg.edit({ embeds: [embed], components }).catch(() => {});
+    await btnMsg.edit({ embeds: [], components }).catch(() => {});
     return btnMsg;
   }
-  const sent = await channel.send({ embeds: [embed], components }).catch(() => null);
+  const sent = await channel.send({ embeds: [], components }).catch(() => null);
   if (sent) {
     match.buttonsMessageId = sent.id;
     manager.persistMatches();
