@@ -67,6 +67,7 @@ const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const cheaterReports = require('./utils/cheaterReports');
 const { COLORS, BRANDING, progressBar, divider } = require('./utils/ui');
+const maintenance = require('./utils/maintenance');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
@@ -110,6 +111,29 @@ const client = new Client({
   ]
 });
 
+client.on(Events.Error, (e) => {
+  maintenance.record('discordApi', e, { source: 'client-error' });
+});
+client.on('warn', (w) => {
+  maintenance.record('warning', w, { source: 'client-warn' });
+});
+client.on(Events.RateLimited, (r) => {
+  maintenance.record('rateLimit', new Error(`Rate limited: ${r.timeout}ms (${r.method} ${r.route})`), { source: 'rate-limited' });
+  maintenance.setSuppression(Math.min(r.timeout + 5000, 120000));
+});
+client.on(Events.ShardDisconnect, (ev, shardId) => {
+  maintenance.record('wsDisconnect', new Error(`Shard ${shardId} disconnected`), { source: 'shard-disconnect' });
+  maintenance.recordEvent('wsDisconnect');
+});
+client.on(Events.ShardReady, (shardId) => {
+  maintenance.recordEvent('wsReady');
+  console.log(`[MAINT] shard ${shardId} ready`);
+});
+client.on(Events.ShardResume, (shardId, replayed) => {
+  maintenance.recordEvent('wsReady');
+  console.log(`[MAINT] shard ${shardId} resumed (${replayed} events replayed)`);
+});
+
 const WINNER_POINTS = config.matchPoints.winner;
 const LOSER_POINTS = config.matchPoints.loser;
 
@@ -133,6 +157,9 @@ function errLog(...args) {
     const dir = require('path').join(__dirname, 'data');
     fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(require('path').join(dir, 'error.log'), line + '\n');
+  } catch { /* ignore */ }
+  try {
+    maintenance.record('internal', new Error(msg.slice(0, 1800)), { source: 'errlog' });
   } catch { /* ignore */ }
 }
 
@@ -3474,6 +3501,87 @@ if (content === '&applyfix' || content === '!applyfix') {
       `🛑 **Match force-ended.** No points were awarded.` +
       (refunded.length ? `\nRefunds:\n${refunded.join('\n')}` : '')
     );
+  } else if (content === '!maint' || content.startsWith('!maint ')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can use the bot maintenance assistant!');
+    }
+    const st = maintenance.getStatus();
+    const mins = Math.floor(st.uptimeMs / 60000);
+    const uptimeStr = mins < 60 ? `${mins}m` : `${(mins / 60).toFixed(1)}h`;
+    const sev = Object.entries(st.bySeverity || {}).map(([k, v]) => `${k}: ${v}`).join(' | ') || 'none';
+    const cats = Object.entries(st.byCategory || {}).map(([k, v]) => `${k}: ${v}`).join(' | ') || 'none';
+    const pending = st.pendingApprovals || [];
+    const incidentLines = (st.incidents || []).slice(0, 5).map(i =>
+      `\`${i.id.slice(-8)}\` **${i.severity.toUpperCase()}** ${i.problem}${i.actionTaken ? ` — ${i.actionTaken}` : ''}`
+    ).join('\n') || 'No recent incidents.';
+    const embed = new EmbedBuilder()
+      .setColor(COLORS.info)
+      .setTitle('🛠️ Bot Maintenance Assistant')
+      .setFooter({ text: BRANDING })
+      .setDescription(
+        `**Uptime:** ${uptimeStr}\n` +
+        `**Total errors recorded:** ${st.totalErrors}\n` +
+        `**Severity:** ${sev}\n` +
+        `**Categories:** ${cats}\n` +
+        `**Gateway:** ${st.rateLimitCooling ? '⚠️ cooling down from rate limit' : '✅ connected'}\n` +
+        `**Last snapshot:** ${st.lastBackupAt ? new Date(st.lastBackupAt).toISOString().slice(0, 19).replace('T', ' ') : 'never'}`
+      )
+      .addFields(
+        { name: '🕵️ Recent incidents', value: incidentLines },
+        {
+          name: '🛂 Pending approval (high-risk fixes)',
+          value: pending.length
+            ? pending.map(a => `\`${a.id}\` ${a.problem} (${a.severity}) — approve with \`!maintapprove ${a.id}\``).join('\n')
+            : 'None.'
+        }
+      );
+    return message.reply({ embeds: [embed] });
+  } else if (content.startsWith('!maintfix ')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can run maintenance fixes!');
+    }
+    const id = content.split(' ')[1];
+    const res = await maintenance.fixIncident(id, message.author.tag);
+    if (res.ok) {
+      return message.reply(`✅ **Fix applied.** Verification: ${res.verification}`);
+    }
+    if (res.needsApproval) {
+      return message.reply(`🛂 **High-risk fix — approval required.**${res.approvalId ? ` Approval ID: \`${res.approvalId}\` (approve with \`!maintapprove ${res.approvalId}\`)` : ''}`);
+    }
+    return message.reply(`❌ ${res.reason || 'Nothing to fix.'}`);
+  } else if (content.startsWith('!maintapprove ')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can approve maintenance fixes!');
+    }
+    const id = content.split(' ')[1];
+    const res = await maintenance.approve(id, message.author.tag);
+    return message.reply(res.ok ? `✅ **Fix executed.** Verification: ${res.verification}` : `❌ ${res.reason || 'Approval failed.'}`);
+  } else if (content.startsWith('!maintreject ')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can reject maintenance fixes!');
+    }
+    const id = content.split(' ')[1];
+    const res = await maintenance.reject(id, message.author.tag);
+    return message.reply(res.ok ? `🛑 Approval \`${id}\` rejected — no change applied.` : `❌ ${res.reason || 'Reject failed.'}`);
+  } else if (content.startsWith('!maintlog')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can view the maintenance log!');
+    }
+    const n = Math.min(parseInt((content.split(' ')[1] || ''), 10) || 10, 25);
+    const entries = maintenance.getLog(n);
+    if (!entries.length) return message.reply('📭 No maintenance log entries yet.');
+    const text = entries.map(e =>
+      `\`${(e.severity || 'info').toUpperCase()}\` [${e.type}] ${e.problem || '(informational)'}${e.cause ? ` — ${e.cause}` : ''}${e.actionTaken ? ` | ${e.actionTaken}` : ''}${e.verification ? ` | ✅ ${e.verification}` : ''}`
+    ).join('\n');
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(COLORS.info)
+          .setTitle('🧾 Maintenance Log')
+          .setDescription(text.slice(0, 4000))
+          .setFooter({ text: BRANDING })
+      ]
+    });
   } else if (content.startsWith('!w') || content.startsWith('!l')) {
     const isWin = content.startsWith('!w');
     if (!canSetResult(message.member)) {
@@ -3628,6 +3736,45 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     errLog('VoiceStateUpdate error:', e);
   }
 });
+
+maintenance.init({
+  client,
+  config,
+  configProvider: () => config,
+  adminCheck: (member) => hasCommandAccess(member),
+  dataDir: require('path').join(__dirname, 'data'),
+  healers: {
+    'repost-commands': async () => {
+      await postCommandsInfoWithRetry();
+      return { ok: true, result: 'Fresh commands message posted to the info channel.' };
+    },
+    're-ensure-channels': async () => {
+      let ensured = 0;
+      for (const g of client.guilds.cache.values()) {
+        try { await ensureCheaterChannels(g); ensured++; } catch (e) { /* channel ensure is best-effort */ }
+        try { await ensureApplyChannels(g); ensured++; } catch (e) { /* channel ensure is best-effort */ }
+      }
+      return { ok: true, result: `Channel ensure ran in ${ensured} guild(s).` };
+    },
+    'revalidate-matches': async () => {
+      const repaired = manager.validateAllMatches();
+      const all = manager.getAllMatches();
+      const balanced = all.every(m => (m.team1 || []).length === (m.team2 || []).length);
+      return { ok: true, result: `Validated ${all.length} match(es); repaired ${repaired.length}. Balanced: ${balanced}` };
+    },
+    'rate-limit-pause': async () => {
+      maintenance.setSuppression(60000);
+      return { ok: true, result: 'Paused heavy periodic syncs for 60s while Discord cools down.' };
+    }
+  },
+  verifiers: {
+    'repost-commands': async () => 'Commands message posted successfully.',
+    're-ensure-channels': async () => 'Channel structures verified.',
+    'revalidate-matches': async (r) => (r && r.ok) ? true : 'State still inconsistent.',
+    'rate-limit-pause': async () => true
+  }
+});
+maintenance.start();
 
 client.login(config.token);
 
