@@ -926,9 +926,20 @@ async function startFullMatch(guild, match) {
   return { team1Channel, team2Channel, roomChannel };
 }
 
-function buildTeamSelectEmbed(match) {
+function buildTeamSelectEmbed(match, guild) {
+  const mode = match.mode || 'amo';
+  const size = match.teamSize || 2;
+  const t1Field = teamPanel(match.team1, mode, size, guild);
+  const t2Field = teamPanel(match.team2, mode, size, guild);
   return new EmbedBuilder()
-    .setColor('#2B2D31');
+    .setTitle('🎮 TEAM SELECTION')
+    .setColor('#2B2D31')
+    .setDescription(`Choose your team for this **${match.teamSize}v${match.teamSize}** match.`)
+    .addFields(
+      { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: t1Field || '*Empty*', inline: true },
+      { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field || '*Empty*', inline: true }
+    )
+    .setFooter({ text: BRANDING });
 }
 
 function buildMatchButtons(match, userId) {
@@ -968,7 +979,7 @@ async function syncJoinButtons(guild, match) {
   const channel = guild.channels.cache.get(match.channelId);
   if (!channel) return null;
   const components = buildMatchButtons(match, client.user.id);
-  const embed = buildTeamSelectEmbed(match);
+  const embed = buildTeamSelectEmbed(match, guild);
   let btnMsg = null;
   if (match.buttonsMessageId) {
     btnMsg = await channel.messages.fetch(match.buttonsMessageId).catch(() => null);
@@ -2269,7 +2280,7 @@ client.on(Events.MessageCreate, async (message) => {
       new ButtonBuilder()
         .setCustomId(`cancel_${match.id}`)
         .setEmoji('❌')
-        .setLabel('Cancel Game')
+        .setLabel('Cancel Match')
         .setStyle(ButtonStyle.Danger)
     );
 
@@ -3023,7 +3034,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         return interaction.reply({ content: '⚠️ Use the **❌ Cancel Match** button inside the match room to start a cancel vote.', ephemeral: true });
       }
-      if (match.creatorId !== interaction.user.id && !hasCommandAccess(interaction.member)) {
+      if (match.creatorId !== interaction.user.id) {
         return interaction.reply({ content: '❌ Only the match host can cancel the match!', ephemeral: true });
       }
       await cancelMatch(interaction.guild, match, `❌ **Match cancelled by** <@${interaction.user.id}>`);
