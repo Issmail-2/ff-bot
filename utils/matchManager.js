@@ -15,6 +15,18 @@ if (!config.roomCategoryId) config.roomCategoryId = '1545316338145165332';
 if (!config.matchViewerRoles) {
   config.matchViewerRoles = process.env.MATCH_VIEWER_ROLE_IDS ? process.env.MATCH_VIEWER_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1466082863115145441'];
 }
+if (!config.matchPingRoles) {
+  config.matchPingRoles = process.env.MATCH_PING_ROLE_IDS ? process.env.MATCH_PING_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1548338723593392198', '1537318639395545139', '1506540916519731310', '1546807156970487838', '1547776062400888912', '1548350425462210570', '1549201615850971216', '1548350896428158976', '1466082863115145441'];
+}
+
+function staffVoiceOverwrites() {
+  const rows = [];
+  for (const roleId of (config.matchPingRoles || [])) {
+    if (!roleId) continue;
+    rows.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect] });
+  }
+  return rows;
+}
 
 const activeMatches = new Map();
 const MATCHES_FILE = path.resolve(__dirname, '..', 'data', 'matches.json');
@@ -467,6 +479,7 @@ async function activatePoolChannels(guild, match, team1Channel, team2Channel) {
       if (!roleId) continue;
       overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel] });
     }
+    overwrites.push(...staffVoiceOverwrites());
     for (const uid of teamIds) {
       if (!isRealId(uid)) continue;
       overwrites.push({ id: uid, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
@@ -537,6 +550,7 @@ async function createVoiceChannels(guild, match) {
     if (!roleId) continue;
     team1Overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel] });
   }
+  team1Overwrites.push(...staffVoiceOverwrites());
   for (const userId of match.team1) {
     if (!isRealId(userId)) continue;
     team1Overwrites.push({ id: userId, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });
@@ -552,6 +566,7 @@ async function createVoiceChannels(guild, match) {
     if (!roleId) continue;
     team2Overwrites.push({ id: roleId, allow: [PermissionsBitField.Flags.ViewChannel] });
   }
+  team2Overwrites.push(...staffVoiceOverwrites());
   for (const userId of match.team2) {
     if (!isRealId(userId)) continue;
     team2Overwrites.push({ id: userId, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ViewChannel] });

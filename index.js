@@ -854,14 +854,19 @@ async function handleStaffReq(interaction, match) {
   }
 }
 
+function isMvpVoter(match, member) {
+  if (!member) return false;
+  const captains = [match.team1[0], match.team2[0]].filter(Boolean);
+  if (captains.includes(member.id)) return true;
+  return [...(config.matchViewerRoles || []), ...(config.matchPingRoles || [])].some(rid => rid && member.roles.cache.has(rid));
+}
+
 async function handleMvpVote(interaction, match) {
   if (match.status !== 'full') {
     return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
   }
-  const captains = [match.team1[0], match.team2[0]].filter(Boolean);
-  const isVoteStaff = (config.matchViewerRoles || []).some(rid => rid && interaction.member.roles.cache.has(rid));
-  if (!captains.includes(interaction.user.id) && !isVoteStaff) {
-    return interaction.reply({ content: '❌ Only the **first player of each team** (or match staff) can vote!', ephemeral: true });
+  if (!isMvpVoter(match, interaction.member)) {
+    return interaction.reply({ content: '❌ Only the **first player of each team** or the roles mentioned in the match can vote!', ephemeral: true });
   }
   if (match.winnerVoteSet && match.loserVoteSet) {
     return interaction.reply({ content: '✅ MVP votes were already finalized.', ephemeral: true });
@@ -910,13 +915,20 @@ async function handleVoteCancel(interaction, match) {
 }
 
 async function handleCancelMatchAction(interaction, match) {
+  const hasRoleAccess = interaction.member && (
+    interaction.member.permissions.has('Administrator') ||
+    (config.matchPingRoles || []).some(rid => rid && interaction.member.roles.cache.has(rid))
+  );
   if (match.status === 'full') {
+    if (hasRoleAccess) {
+      return handleStaffCancel(interaction, match);
+    }
     if (interaction.channel && interaction.channel.id === match.channelId2) {
       return openCancelVote(interaction.guild, match, interaction);
     }
     return interaction.reply({ content: '⚠️ Use the **❌ Cancel Match** option inside the match room to start a cancel vote.', ephemeral: true });
   }
-  if (match.creatorId !== interaction.user.id) {
+  if (match.creatorId !== interaction.user.id && !hasRoleAccess) {
     return interaction.reply({ content: '❌ Only the match host can cancel the match!', ephemeral: true });
   }
   await cancelMatch(interaction.guild, match, `❌ **Match cancelled by** <@${interaction.user.id}>`);
@@ -2873,10 +2885,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const voterId = interaction.user.id;
     const captains = [match.team1[0], match.team2[0]].filter(Boolean);
-    if (!captains.includes(voterId)) {
-      return interaction.reply({ content: '❌ Only the **first player of each team** can vote!', ephemeral: true });
+    if (!isMvpVoter(match, interaction.member)) {
+      return interaction.reply({ content: '❌ Only the **first player of each team** or the roles mentioned in the match can vote!', ephemeral: true });
     }
-    const otherId = voterId === match.team1[0] ? match.team2[0] : match.team1[0];
+    const isCaptainVote = captains.includes(voterId);
+    const otherId = isCaptainVote ? (voterId === match.team1[0] ? match.team2[0] : match.team1[0]) : null;
 
     if (kind === 'type') {
       const isWinner = interaction.values[0] === 'winner';
@@ -2937,6 +2950,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (roomChannel) roomChannel.send({ content: text }).catch(() => {});
     };
     const voteLabel = isWinner ? '🏆 Winner MVP' : '💪 Loser MVP';
+    if (!isCaptainVote) {
+      if (isWinner) {
+        match.winnerTeam = match[votesKey][voterId].team;
+        match.mvpWinnerId = selected;
+      } else {
+        match.loserTeam = match[votesKey][voterId].team;
+        match.mvpLoserId = selected;
+      }
+      match[setKey] = true;
+      match.resultStatus = null;
+      manager.persistMatches();
+      await updateResultBox(interaction.guild, match);
+      announce(`✅ **Vote complete!** ${voteLabel} set by <@${voterId}> (match role): <@${selected}>.`);
+      msg = `✅ Vote accepted! ${voteLabel}: <@${selected}>`;
+      if (match.winnerVoteSet && match.loserVoteSet) {
+        await interaction.update({ embeds: [], components: [], content: msg });
+        await settleMatchResult(interaction.guild, match);
+        return;
+      }
+      return interaction.update({ embeds: [], components: [], content: msg });
+    }
     if (other && other.team === teamOf(selected) && other.player === selected) {
       if (isWinner) {
         match.winnerTeam = match[votesKey][voterId].team;
