@@ -986,6 +986,13 @@ function buildMainMatchEmbed(match, guild) {
   if (votes.length) status = votes.join('       ');
   if (match.resultStatus) status = String(match.resultStatus);
 
+  const fields = [
+    { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: t1Field, inline: true },
+    { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field, inline: true },
+    { name: '⚡ STATUS', value: status || '—' }
+  ];
+  if (match.options) fields.push({ name: '⚙️ OPTIONS', value: String(match.options) });
+
   return new EmbedBuilder()
     .setTitle(`${config.emojis.game} CUSTOM ROOM`)
     .setColor(COLORS.gold)
@@ -994,11 +1001,7 @@ function buildMainMatchEmbed(match, guild) {
       `🔑 **Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
       `🔒 **Password** _(hover to copy)_\n\`\`\`${match.password}\`\`\``
     )
-    .addFields(
-      { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: t1Field, inline: true },
-      { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field, inline: true },
-      { name: '⚡ STATUS', value: status || '—' }
-    )
+    .addFields(fields)
     .setFooter({ text: BRANDING });
 }
 
@@ -2725,6 +2728,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const roomId = interaction.fields.getTextInputValue('roomIdInput').trim();
     const password = interaction.fields.getTextInputValue('passwordInput').trim();
     const matchKey = interaction.fields.getTextInputValue('keyInput').trim();
+    const matchOptions = (interaction.fields.getTextInputValue('optionsInput') || '').trim();
 
     if (![2, 3, 4].includes(match.teamSize)) {
       console.log('[MODAL] invalid team size on match', match.teamSize);
@@ -2743,8 +2747,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
+    match.options = matchOptions;
     match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} options=${matchOptions} creator auto-joined T1`);
 
     try {
       const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
@@ -3014,7 +3019,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row3 = new ActionRowBuilder().addComponents(keyInput);
 
-      roomModal.addComponents(row1, row2, row3);
+      const optionsInput = new TextInputBuilder()
+        .setCustomId('optionsInput')
+        .setLabel('Options (Highlight / Apostado / Zelika)')
+        .setPlaceholder('Optional - e.g. Highlight: H2, Apostado: 500, Zelika: ZK7')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false);
+
+      const row4 = new ActionRowBuilder().addComponents(optionsInput);
+
+      roomModal.addComponents(row1, row2, row3, row4);
 
       if (match.configTimeout) clearTimeout(match.configTimeout);
       match.configTimeout = setTimeout(() => {
