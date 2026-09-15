@@ -23,6 +23,20 @@ const suppressedUsers = new Set();
 const restoringPlayers = new Map();
 const VOICE_POOL_SIZE = parseInt(process.env.VOICE_POOL_SIZE || '0') || (config.voicePoolSize || 5);
 const voicePool = new Map();
+const poolInUse = new Map();
+
+function markPoolInUse(mode, ids) {
+  if (!ids || !ids.length) return;
+  if (!poolInUse.has(mode)) poolInUse.set(mode, new Set());
+  for (const id of ids) poolInUse.get(mode).add(id);
+}
+
+function releasePoolInUse(mode, ids) {
+  if (!ids || !ids.length) return;
+  const set = poolInUse.get(mode);
+  if (!set) return;
+  for (const id of ids) set.delete(id);
+}
 
 function isRealId(id) {
   return typeof id === 'string' && /^\d{15,20}$/.test(id);
@@ -200,6 +214,9 @@ function loadMatches() {
           changed = true;
         }
         activeMatches.set(m.id, m);
+        if (m.usePool && Array.isArray(m.voiceChannels) && m.voiceChannels.length) {
+          markPoolInUse(m.mode || 'amo', m.voiceChannels);
+        }
       });
       if (changed) persistMatches();
     }
@@ -431,7 +448,9 @@ function findEmptyChannel(guild, mode, team) {
   const pool = voicePool.get(mode);
   if (!pool) return null;
   const ids = team === 1 ? pool.t1 : pool.t2;
+  const inUse = poolInUse.get(mode);
   for (const id of ids) {
+    if (inUse && inUse.has(id)) continue;
     const ch = guild.channels.cache.get(id);
     if (ch && ch.members.size === 0) return ch;
   }
@@ -480,7 +499,10 @@ async function createVoiceChannels(guild, match) {
     const t1 = await resolveChannel(guild, match.voiceChannels[0]);
     const t2 = await resolveChannel(guild, match.voiceChannels[1]);
     if (t1 && t1.type === ChannelType.GuildVoice && t2 && t2.type === ChannelType.GuildVoice) {
-      if (match.usePool) await activatePoolChannels(guild, match, t1, t2);
+      if (match.usePool) {
+        await activatePoolChannels(guild, match, t1, t2);
+        markPoolInUse(match.mode || 'amo', match.voiceChannels);
+      }
       return { team1Channel: t1, team2Channel: t2 };
     }
     console.log(`[VOICE] match ${match.id}: recorded team channels stale (${match.voiceChannels.join(', ')}) — recreating pair`);
@@ -498,6 +520,7 @@ async function createVoiceChannels(guild, match) {
       await activatePoolChannels(guild, match, t1ch, t2ch);
       match.voiceChannels = [t1ch.id, t2ch.id];
       match.usePool = true;
+      markPoolInUse(mode, match.voiceChannels);
       console.log(`[POOL] Assigned pool channels for ${mode}: ${t1ch.id} + ${t2ch.id}`);
       return { team1Channel: t1ch, team2Channel: t2ch };
     }
@@ -811,9 +834,11 @@ async function deleteVoiceChannels(guild, match) {
   suppressUsers(allPlayers);
 
   if (match.usePool) {
+    const mode = match.mode || 'amo';
     for (const channelId of match.voiceChannels) {
       await deactivatePoolChannel(guild, channelId);
     }
+    releasePoolInUse(mode, match.voiceChannels);
     match.voiceChannels = [];
     match.usePool = false;
     match.originalChannels = {};
