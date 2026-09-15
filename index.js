@@ -805,17 +805,129 @@ async function openCancelVote(guild, match, interaction) {
   return interaction.reply({ content: '❌ **Move to cancel started.** Need 2 votes from each team. Press **🗳️ Vote for Cancel** in the match room.', ephemeral: true });
 }
 
-function buildResultButtons(match) {
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`staffreq_${match.id}`).setEmoji('🛡️').setLabel('Staff Request').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`mvpvote_${match.id}`).setEmoji('🗳️').setLabel('Vote for MVP').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`cancel_${match.id}`).setEmoji('❌').setLabel('Cancel Match').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`staffcancel_${match.id}`).setEmoji('🚫').setLabel('Staff Cancel').setStyle(ButtonStyle.Danger)
+function buildMatchMenu(match) {
+  const row = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`matchmenu_${match.id}`)
+      .setPlaceholder('⚙️ Match Actions (tap to select)')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(
+        new StringSelectMenuOptionBuilder().setEmoji('🛡️').setLabel('Request Staff').setDescription('Notify staff about this match').setValue('staffreq'),
+        new StringSelectMenuOptionBuilder().setEmoji('🗳️').setLabel('Vote for MVP').setDescription('Winner/Loser MVP voting (captains/staff)').setValue('mvp'),
+        new StringSelectMenuOptionBuilder().setEmoji('❌').setLabel('Cancel Match').setDescription('Host cancel / start cancel vote').setValue('cancel'),
+        new StringSelectMenuOptionBuilder().setEmoji('🚫').setLabel('Staff Cancel').setDescription('Immediate cancel (staff only)').setValue('staffcancel'),
+        new StringSelectMenuOptionBuilder().setEmoji('↩️').setLabel('Cancel My Vote').setDescription('Clear your MVP vote').setValue('votecancel')
+      )
   );
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`votecancel_${match.id}`).setEmoji('↩️').setLabel('Cancel My Vote').setStyle(ButtonStyle.Danger)
+  return [row];
+}
+
+async function handleStaffReq(interaction, match) {
+  const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
+  if (!allPlayers.includes(interaction.user.id)) {
+    return interaction.reply({ content: '❌ Only players in this match can request staff!', ephemeral: true });
+  }
+  const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
+  await interaction.deferReply({ ephemeral: true });
+  const modeDisplay = getModeConfig(match.mode).displayName;
+  const staffEmbed = new EmbedBuilder()
+    .setTitle('🛡️ STAFF REQUEST')
+    .setColor('#F1C40F')
+    .setDescription(
+      `<@${interaction.user.id}> is requesting staff for the **${match.teamSize}v${match.teamSize}** match.\n\n${roleMentions}`
+    )
+    .addFields(
+      { name: '🎮 Mode', value: modeDisplay, inline: true },
+      { name: '📊 Teams', value: `🔴 ${match.team1.length}/${match.teamSize}  |  🟢 ${match.team2.length}/${match.teamSize}`, inline: true }
+    )
+    .setFooter({ text: BRANDING });
+  try {
+    await interaction.channel.send({ embeds: [staffEmbed], allowedMentions: { roles: (config.staffRoles || []), users: [] } });
+    await interaction.editReply({ content: '✅ Staff has been notified!' });
+  } catch (e) {
+    console.log('[STAFF] send failed:', e.message);
+    await interaction.editReply({ embeds: [staffEmbed] });
+  }
+}
+
+async function handleMvpVote(interaction, match) {
+  if (match.status !== 'full') {
+    return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
+  }
+  const captains = [match.team1[0], match.team2[0]].filter(Boolean);
+  const isVoteStaff = (config.matchViewerRoles || []).some(rid => rid && interaction.member.roles.cache.has(rid));
+  if (!captains.includes(interaction.user.id) && !isVoteStaff) {
+    return interaction.reply({ content: '❌ Only the **first player of each team** (or match staff) can vote!', ephemeral: true });
+  }
+  if (match.winnerVoteSet && match.loserVoteSet) {
+    return interaction.reply({ content: '✅ MVP votes were already finalized.', ephemeral: true });
+  }
+  const roster = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
+  if (roster.length === 0) {
+    return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
+  }
+  const typeRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`mvptype_${match.id}`)
+      .setPlaceholder('Select the vote type')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(
+        new StringSelectMenuOptionBuilder().setLabel('🏆 Winner MVP').setValue('winner'),
+        new StringSelectMenuOptionBuilder().setLabel('💪 Loser MVP').setValue('loser')
+      )
   );
-  return [row1, row2];
+  const embed = new EmbedBuilder()
+    .setTitle('🗳️ MVP Voting')
+    .setColor(COLORS.gold)
+    .setDescription('Select **Winner MVP** or **Loser MVP**, then pick the player.\nOnly the **first 2 players of each team** are listed.');
+  return interaction.reply({ embeds: [embed], components: [typeRow], ephemeral: true });
+}
+
+async function handleVoteCancel(interaction, match) {
+  const voterId = interaction.user.id;
+  const changed = [];
+  for (const key of ['winnerVotes', 'loserVotes']) {
+    const setKey = key === 'winnerVotes' ? 'winnerVoteSet' : 'loserVoteSet';
+    if (match[setKey]) continue;
+    if (match[key] && match[key][voterId]) {
+      delete match[key][voterId];
+      changed.push(key === 'winnerVotes' ? 'winner' : 'loser');
+    }
+  }
+  manager.persistMatches();
+  await updateResultBox(interaction.guild, match);
+  return interaction.reply({
+    content: changed.length
+      ? `✅ Your ${changed.join(' & ')} vote was cleared. Vote again with 🗳️ Vote MVP.`
+      : 'ℹ️ No pending votes to clear (agreed votes are locked).',
+    ephemeral: true
+  });
+}
+
+async function handleCancelMatchAction(interaction, match) {
+  if (match.status === 'full') {
+    if (interaction.channel && interaction.channel.id === match.channelId2) {
+      return openCancelVote(interaction.guild, match, interaction);
+    }
+    return interaction.reply({ content: '⚠️ Use the **❌ Cancel Match** option inside the match room to start a cancel vote.', ephemeral: true });
+  }
+  if (match.creatorId !== interaction.user.id) {
+    return interaction.reply({ content: '❌ Only the match host can cancel the match!', ephemeral: true });
+  }
+  await cancelMatch(interaction.guild, match, `❌ **Match cancelled by** <@${interaction.user.id}>`);
+  await interaction.reply({ content: '❌ Match cancelled!', ephemeral: true });
+}
+
+async function handleStaffCancel(interaction, match) {
+  const isStaff = interaction.member.permissions.has('Administrator') ||
+    [...(config.staffRoles || []), ...(config.adminRoles || [])].some(rid => interaction.member.roles.cache.has(rid));
+  if (!isStaff) {
+    return interaction.reply({ content: '❌ Only staff can cancel the match!', ephemeral: true });
+  }
+  await cancelMatch(interaction.guild, match, `🚫 **Match cancelled by staff** (<@${interaction.user.id}>)`);
+  await interaction.reply({ content: '🚫 Match cancelled by staff!', ephemeral: true });
 }
 
 function mvpPlayerOptions(guild, match, excludeId) {
@@ -869,7 +981,7 @@ async function updateResultBox(guild, match) {
   if (!roomChannel || !match.resultMessageId) return;
   const msg = await roomChannel.messages.fetch(match.resultMessageId).catch(() => null);
   if (!msg) return;
-  await msg.edit({ embeds: [buildMainMatchEmbed(match, guild)], components: buildResultButtons(match) }).catch(() => {});
+  await msg.edit({ embeds: [buildMainMatchEmbed(match, guild)], components: buildMatchMenu(match) }).catch(() => {});
 }
 
 async function startFullMatch(guild, match) {
@@ -919,7 +1031,7 @@ async function startFullMatch(guild, match) {
   let boxMsg;
   try {
     const roomChat = guild.channels.cache.get(roomChannelId) || roomChannel;
-    boxMsg = await roomChat.send({ embeds: [buildMainMatchEmbed(match, guild)], components: buildResultButtons(match) });
+    boxMsg = await roomChat.send({ embeds: [buildMainMatchEmbed(match, guild)], components: buildMatchMenu(match) });
   } catch (e) {
     console.error('Failed to post match result box:', e.message);
   }
@@ -2663,6 +2775,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     let kind = null;
     let matchId = null;
 
+    if (cid.startsWith('matchmenu_')) {
+      const mId = cid.slice('matchmenu_'.length);
+      if (!mId) return interaction.reply({ content: '⚠️ Unknown selection.', ephemeral: true });
+      const match = manager.getMatch(mId);
+      if (!match) return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+      const value = interaction.values[0];
+      if (value === 'staffreq') return handleStaffReq(interaction, match);
+      if (value === 'mvp') return handleMvpVote(interaction, match);
+      if (value === 'votecancel') return handleVoteCancel(interaction, match);
+      if (value === 'cancel') return handleCancelMatchAction(interaction, match);
+      if (value === 'staffcancel') return handleStaffCancel(interaction, match);
+      return interaction.reply({ content: '⚠️ Unknown action.', ephemeral: true });
+    }
+
     if (cid.startsWith('mvptype_')) {
       kind = 'type';
       matchId = cid.slice('mvptype_'.length);
@@ -2894,87 +3020,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === 'mvpvote' || action === 'mvpwinner' || action === 'mvploser') {
-      if (match.status !== 'full') {
-        return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
-      }
-      const captains = [match.team1[0], match.team2[0]].filter(Boolean);
-      const isVoteStaff = (config.matchViewerRoles || []).some(rid => rid && interaction.member.roles.cache.has(rid));
-      if (!captains.includes(interaction.user.id) && !isVoteStaff) {
-        return interaction.reply({ content: '❌ Only the **first player of each team** (or match staff) can vote!', ephemeral: true });
-      }
-      if (match.winnerVoteSet && match.loserVoteSet) {
-        return interaction.reply({ content: '✅ MVP votes were already finalized.', ephemeral: true });
-      }
-      const roster = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
-      if (roster.length === 0) {
-        return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
-      }
-      const typeRow = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`mvptype_${match.id}`)
-          .setPlaceholder('Select the vote type')
-          .setMinValues(1)
-          .setMaxValues(1)
-          .addOptions(
-            new StringSelectMenuOptionBuilder().setLabel('🏆 Winner MVP').setValue('winner'),
-            new StringSelectMenuOptionBuilder().setLabel('💪 Loser MVP').setValue('loser')
-          )
-      );
-      const embed = new EmbedBuilder()
-        .setTitle('🗳️ MVP Voting')
-        .setColor(COLORS.gold)
-        .setDescription('Select **Winner MVP** or **Loser MVP**, then pick the player.\nOnly the **first 2 players of each team** are listed.');
-      return interaction.reply({ embeds: [embed], components: [typeRow], ephemeral: true });
+      return handleMvpVote(interaction, match);
     }
 
     if (action === 'votecancel') {
-      const voterId = interaction.user.id;
-      const changed = [];
-      for (const key of ['winnerVotes', 'loserVotes']) {
-        const setKey = key === 'winnerVotes' ? 'winnerVoteSet' : 'loserVoteSet';
-        if (match[setKey]) continue;
-        if (match[key] && match[key][voterId]) {
-          delete match[key][voterId];
-          changed.push(key === 'winnerVotes' ? 'winner' : 'loser');
-        }
-      }
-      manager.persistMatches();
-      await updateResultBox(interaction.guild, match);
-      return interaction.reply({
-        content: changed.length
-          ? `✅ Your ${changed.join(' & ')} vote was cleared. Vote again with 🗳️ Vote MVP.`
-          : 'ℹ️ No pending votes to clear (agreed votes are locked).',
-        ephemeral: true
-      });
+      return handleVoteCancel(interaction, match);
     }
 
     if (action === 'staffreq') {
-      const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
-      if (!allPlayers.includes(interaction.user.id)) {
-        return interaction.reply({ content: '❌ Only players in this match can request staff!', ephemeral: true });
-      }
-      const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
-      await interaction.deferReply({ ephemeral: true });
-      const modeDisplay = getModeConfig(match.mode).displayName;
-      const staffEmbed = new EmbedBuilder()
-        .setTitle('🛡️ STAFF REQUEST')
-        .setColor('#F1C40F')
-        .setDescription(
-          `<@${interaction.user.id}> is requesting staff for the **${match.teamSize}v${match.teamSize}** match.\n\n${roleMentions}`
-        )
-        .addFields(
-          { name: '🎮 Mode', value: modeDisplay, inline: true },
-          { name: '📊 Teams', value: `🔴 ${match.team1.length}/${match.teamSize}  |  🟢 ${match.team2.length}/${match.teamSize}`, inline: true }
-        )
-        .setFooter({ text: BRANDING });
-      try {
-        await interaction.channel.send({ embeds: [staffEmbed], allowedMentions: { roles: (config.staffRoles || []), users: [] } });
-        await interaction.editReply({ content: '✅ Staff has been notified!' });
-      } catch (e) {
-        console.log('[STAFF] send failed:', e.message);
-        await interaction.editReply({ embeds: [staffEmbed] });
-      }
-      return;
+      return handleStaffReq(interaction, match);
     }
 
     if (action === 'leave') {
@@ -3027,18 +3081,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === 'cancel') {
-      if (match.status === 'full') {
-        if (interaction.channel && interaction.channel.id === match.channelId2) {
-          return openCancelVote(interaction.guild, match, interaction);
-        }
-        return interaction.reply({ content: '⚠️ Use the **❌ Cancel Match** button inside the match room to start a cancel vote.', ephemeral: true });
-      }
-      if (match.creatorId !== interaction.user.id) {
-        return interaction.reply({ content: '❌ Only the match host can cancel the match!', ephemeral: true });
-      }
-      await cancelMatch(interaction.guild, match, `❌ **Match cancelled by** <@${interaction.user.id}>`);
-      await interaction.reply({ content: '❌ Match cancelled!', ephemeral: true });
-      return;
+      return handleCancelMatchAction(interaction, match);
     }
 
     if (action === 'cancelfvote') {
@@ -3077,14 +3120,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === 'staffcancel') {
-      const isStaff = interaction.member.permissions.has('Administrator') ||
-        [...(config.staffRoles || []), ...(config.adminRoles || [])].some(rid => interaction.member.roles.cache.has(rid));
-      if (!isStaff) {
-        return interaction.reply({ content: '❌ Only staff can cancel the match!', ephemeral: true });
-      }
-      await cancelMatch(interaction.guild, match, `🚫 **Match cancelled by staff** (<@${interaction.user.id}>)`);
-      await interaction.reply({ content: '🚫 Match cancelled by staff!', ephemeral: true });
-      return;
+      return handleStaffCancel(interaction, match);
     }
   }
   } catch (e) {
