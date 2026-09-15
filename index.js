@@ -2955,13 +2955,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const roleMentions = (config.staffRoles || []).map(id => `<@&${id}>`).join(' ');
       await interaction.deferReply({ ephemeral: true });
-      const staffMsg = `🛡️ **Staff Request** from <@${interaction.user.id}> for Match ${match.teamSize}v${match.teamSize}.\n${roleMentions}`;
+      const modeDisplay = getModeConfig(match.mode).displayName;
+      const staffEmbed = new EmbedBuilder()
+        .setTitle('🛡️ STAFF REQUEST')
+        .setColor('#F1C40F')
+        .setDescription(
+          `<@${interaction.user.id}> is requesting staff for the **${match.teamSize}v${match.teamSize}** match.\n\n${roleMentions}`
+        )
+        .addFields(
+          { name: '🎮 Mode', value: modeDisplay, inline: true },
+          { name: '📊 Teams', value: `🔴 ${match.team1.length}/${match.teamSize}  |  🟢 ${match.team2.length}/${match.teamSize}`, inline: true }
+        )
+        .setFooter({ text: BRANDING });
       try {
-        await interaction.channel.send({ content: staffMsg, allowedMentions: { roles: (config.staffRoles || []), users: [] } });
+        await interaction.channel.send({ embeds: [staffEmbed], allowedMentions: { roles: (config.staffRoles || []), users: [] } });
         await interaction.editReply({ content: '✅ Staff has been notified!' });
       } catch (e) {
         console.log('[STAFF] send failed:', e.message);
-        await interaction.editReply({ content: staffMsg });
+        await interaction.editReply({ embeds: [staffEmbed] });
       }
       return;
     }
