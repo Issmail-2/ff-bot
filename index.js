@@ -817,7 +817,8 @@ function buildMatchMenu(match) {
         new StringSelectMenuOptionBuilder().setEmoji('🗳️').setLabel('Vote for MVP').setDescription('Winner/Loser MVP voting (captains/staff)').setValue('mvp'),
         new StringSelectMenuOptionBuilder().setEmoji('❌').setLabel('Cancel Match').setDescription('Host cancel / start cancel vote').setValue('cancel'),
         new StringSelectMenuOptionBuilder().setEmoji('🚫').setLabel('Staff Cancel').setDescription('Immediate cancel (staff only)').setValue('staffcancel'),
-        new StringSelectMenuOptionBuilder().setEmoji('↩️').setLabel('Cancel My Vote').setDescription('Clear your MVP vote').setValue('votecancel')
+        new StringSelectMenuOptionBuilder().setEmoji('↩️').setLabel('Cancel My Vote').setDescription('Clear your MVP vote').setValue('votecancel'),
+        new StringSelectMenuOptionBuilder().setEmoji('🔄').setLabel('Reset Votes').setDescription('Reset all votes (roles mentioned in match)').setValue('resetvotes')
       )
   );
   return [row];
@@ -928,6 +929,31 @@ async function handleStaffCancel(interaction, match) {
   }
   await cancelMatch(interaction.guild, match, `🚫 **Match cancelled by staff** (<@${interaction.user.id}>)`);
   await interaction.reply({ content: '🚫 Match cancelled by staff!', ephemeral: true });
+}
+
+async function handleResetVotes(interaction, match) {
+  const allowed = (config.matchPingRoles || []).some(rid => rid && interaction.member.roles.cache.has(rid));
+  if (!allowed && !interaction.member.permissions.has('Administrator')) {
+    return interaction.reply({ content: '❌ Only the roles mentioned in the match can reset votes!', ephemeral: true });
+  }
+  if (match.winnerVoteSet && match.loserVoteSet) {
+    return interaction.reply({ content: '❌ MVP results are already finalized.', ephemeral: true });
+  }
+  match.winnerVotes = {};
+  match.loserVotes = {};
+  match.cancelVotes = { 1: [], 2: [] };
+  match.winnerVoteSet = false;
+  match.loserVoteSet = false;
+  match.mvpWinnerId = null;
+  match.mvpLoserId = null;
+  match.winnerTeam = null;
+  match.loserTeam = null;
+  match.resultStatus = '🔄 Votes have been reset. Use the menu again to re-vote.';
+  manager.persistMatches();
+  await updateResultBox(interaction.guild, match);
+  await interaction.reply({ content: '🔄 All votes have been reset!', ephemeral: true });
+  const room = interaction.guild.channels.cache.get(match.channelId2);
+  if (room) room.send({ content: `🔄 **Votes have been reset** by <@${interaction.user.id}>. Captains <@${match.team1[0]}> & <@${match.team2[0]}> can vote again.` }).catch(() => {});
 }
 
 function mvpPlayerOptions(guild, match, excludeId) {
@@ -2786,6 +2812,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (value === 'votecancel') return handleVoteCancel(interaction, match);
       if (value === 'cancel') return handleCancelMatchAction(interaction, match);
       if (value === 'staffcancel') return handleStaffCancel(interaction, match);
+      if (value === 'resetvotes') return handleResetVotes(interaction, match);
       return interaction.reply({ content: '⚠️ Unknown action.', ephemeral: true });
     }
 
@@ -2872,6 +2899,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const other = otherId ? match[votesKey][otherId] : null;
     let msg;
+    const announce = (text) => {
+      const roomChannel = interaction.guild.channels.cache.get(match.channelId2);
+      if (roomChannel) roomChannel.send({ content: text }).catch(() => {});
+    };
+    const voteLabel = isWinner ? '🏆 Winner MVP' : '💪 Loser MVP';
     if (other && other.team === teamOf(selected) && other.player === selected) {
       if (isWinner) {
         match.winnerTeam = match[votesKey][voterId].team;
@@ -2884,7 +2916,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       match.resultStatus = null;
       manager.persistMatches();
       await updateResultBox(interaction.guild, match);
-      msg = `✅ Both captains agree! ${isWinner ? '🏆 Winner MVP' : '💪 Loser MVP'}: <@${selected}>`;
+      announce(`✅ **Vote complete!** ${voteLabel} is <@${selected}> — both captains agree.`);
+      msg = `✅ Both captains agree! ${voteLabel}: <@${selected}>`;
       if (match.winnerVoteSet && match.loserVoteSet) {
         await interaction.update({ embeds: [], components: [], content: msg });
         await settleMatchResult(interaction.guild, match);
@@ -2895,10 +2928,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       match.resultStatus = `❌ ${isWinner ? 'Winner' : 'Loser'} votes didn't match! Please vote again.`;
       manager.persistMatches();
       await updateResultBox(interaction.guild, match);
+      announce(`❌ **${isWinner ? 'Winner' : 'Loser'} votes didn't match, please vote again!** (captains <@${match.team1[0]}> & <@${match.team2[0]}>)`);
       msg = `❌ Votes aren't the same, please try again!`;
-      interaction.channel.send({ content: `❌ **${isWinner ? 'Winner' : 'Loser'} votes didn't match, please vote again!** (captains <@${match.team1[0]}> & <@${match.team2[0]}>)` }).catch(() => {});
     } else {
       const otherName = otherId ? await getPlayerName(interaction.guild, otherId) : 'the other captain';
+      announce(`✅ <@${voterId}> voted for **${voteLabel}** — waiting for <@${otherId}> (${otherName}).`);
       msg = `✅ Vote saved! Waiting for **${otherName}** to vote.`;
     }
     return interaction.update({ embeds: [], components: [], content: msg });
