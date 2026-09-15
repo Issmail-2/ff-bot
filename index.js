@@ -375,7 +375,7 @@ The **#1 ranked player** automatically receives the Role #1 role.
 \`!leaderboard\` — show the top players
 \`!balance\` / \`!bal\` — check your points (\`!balance @user\` to check someone else)
 \`!stats [@user]\` — combined stats, rank, win rate and MVP count
-\`!rank [@user]\` — show a rank profile card image with points, rank, W/L and MVP
+\`!rank [@user] [amo|esport]\` — profile card image for that mode with points, rank, W/L and MVP
 
 🛡️ **REPORTS & ROLES**
 Report a cheater in <#1546846855676043264> with the **🛡️ Report Player** button — takes **50 pts**, you get **+100 pts** + a reward role if the player is confirmed.
@@ -3325,7 +3325,7 @@ async function fetchAvatarBuffer(user) {
 
 function fmtNum(n) { return Number(n || 0).toLocaleString('en-US'); }
 
-async function renderRankCard(member, uid, amo, esp, combinedIdx) {
+async function renderRankCard(member, uid, primary, primaryName, primaryRank, secondary, secondaryName, secondaryRank) {
   const { createCanvas, loadImage } = canvasLib;
   const W = 900, H = 500;
   const cv = createCanvas(W, H);
@@ -3344,6 +3344,16 @@ async function renderRankCard(member, uid, amo, esp, combinedIdx) {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
+  const pts = primary.totalPoints || 0;
+  const wins = primary.wins || 0;
+  const losses = primary.losses || 0;
+  const matchesTotal = wins + losses;
+  const winRate = matchesTotal ? Math.round((wins / matchesTotal) * 100) : 0;
+  const mvpCount = primary.mvpCount || 0;
+  const secPts = secondary.totalPoints || 0;
+  const secWins = secondary.wins || 0;
+  const secLosses = secondary.losses || 0;
+
   ctx.save();
   ctx.globalAlpha = 0.25;
   ctx.beginPath(); ctx.arc(0, 0, 220, 0, Math.PI * 2); ctx.fillStyle = accent2; ctx.fill();
@@ -3352,7 +3362,7 @@ async function renderRankCard(member, uid, amo, esp, combinedIdx) {
   ctx.fillStyle = white;
   ctx.font = `900 130px ${ff}`;
   ctx.textBaseline = 'top';
-  ctx.fillText(fmtNum((amo.totalPoints || 0) + (esp.totalPoints || 0)), W - 330, 40);
+  ctx.fillText(fmtNum(pts), W - 330, 40);
   ctx.restore();
 
   ctx.save();
@@ -3382,74 +3392,71 @@ async function renderRankCard(member, uid, amo, esp, combinedIdx) {
 
   const X = 285;
   const name = member ? (member.displayName || member.user.username) : uid;
+
+  ctx.fillStyle = accent;
+  ctx.font = `bold 20px ${ff}`;
+  ctx.textBaseline = 'top';
+  ctx.fillText((primaryName || '').toUpperCase(), X, 44);
+
   ctx.fillStyle = white;
   ctx.font = `bold 38px ${ff}`;
-  ctx.textBaseline = 'top';
   ctx.fillText(name.slice(0, 22), X, 78);
 
   ctx.fillStyle = accent;
   ctx.font = `bold 24px ${ff}`;
-  ctx.fillText('RANK', X, 128);
+  ctx.fillText('RANK', X, 132);
   ctx.fillStyle = white;
   ctx.font = `bold 48px ${ff}`;
-  ctx.fillText(combinedIdx === -1 ? 'UNRANKED' : `#${combinedIdx + 1}`, X + 100, 118);
+  ctx.fillText(primaryRank === null ? 'UNRANKED' : `#${primaryRank}`, X + 100, 122);
 
   ctx.strokeStyle = 'rgba(255,255,255,0.10)';
   ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(X, 185); ctx.lineTo(W - 60, 185); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(X, 190); ctx.lineTo(W - 60, 190); ctx.stroke();
 
-  const totalPts = fmtNum((amo.totalPoints || 0) + (esp.totalPoints || 0));
+  const ptsStr = fmtNum(pts);
   ctx.fillStyle = white;
   ctx.font = `bold 58px ${ff}`;
-  const ptsW = ctx.measureText(totalPts).width;
-  ctx.fillText(totalPts, X, 210);
+  const ptsW = ctx.measureText(ptsStr).width;
+  ctx.fillText(ptsStr, X, 215);
   ctx.fillStyle = accent;
   ctx.font = `bold 22px ${ff}`;
-  ctx.fillText('PTS', X + ptsW + 14, 238);
-
-  const totalWins = (amo.wins || 0) + (esp.wins || 0);
-  const totalLosses = (amo.losses || 0) + (esp.losses || 0);
-  const totalMatches = totalWins + totalLosses;
-  const winRate = totalMatches ? Math.round((totalWins / totalMatches) * 100) : 0;
+  ctx.fillText('PTS', X + ptsW + 14, 243);
 
   ctx.fillStyle = accent2;
   ctx.font = `bold 22px ${ff}`;
-  ctx.fillText('W', X, 300);
+  ctx.fillText('W', X, 302);
   ctx.fillStyle = white;
   ctx.font = `bold 34px ${ff}`;
-  ctx.fillText(String(totalWins), X + 32, 292);
+  ctx.fillText(String(wins), X + 32, 294);
   ctx.fillStyle = '#ff6b6b';
   ctx.font = `bold 22px ${ff}`;
-  ctx.fillText('L', X + 110, 300);
+  ctx.fillText('L', X + 110, 302);
   ctx.fillStyle = white;
   ctx.font = `bold 34px ${ff}`;
-  ctx.fillText(String(totalLosses), X + 142, 292);
+  ctx.fillText(String(losses), X + 142, 294);
   ctx.fillStyle = dim;
   ctx.font = `600 20px ${ff}`;
-  ctx.fillText(`${totalMatches} MATCHES`, X + 230, 302);
+  ctx.fillText(`${matchesTotal} MATCHES`, X + 230, 304);
 
-  const mvp = (amo.mvpCount || 0) + (esp.mvpCount || 0);
   ctx.fillStyle = accent;
   ctx.font = `bold 20px ${ff}`;
-  ctx.fillText('WIN RATE', X, 360);
+  ctx.fillText('WIN RATE', X, 362);
   ctx.fillStyle = white;
   ctx.font = `bold 32px ${ff}`;
-  ctx.fillText(`${winRate}%`, X + 130, 354);
+  ctx.fillText(`${winRate}%`, X + 130, 356);
   ctx.fillStyle = accent2;
   ctx.font = `bold 20px ${ff}`;
-  ctx.fillText('MVP', X, 410);
+  ctx.fillText('MVP', X, 412);
   ctx.fillStyle = white;
   ctx.font = `bold 32px ${ff}`;
-  ctx.fillText(String(mvp), X + 60, 404);
+  ctx.fillText(String(mvpCount), X + 60, 406);
 
-  const footY = 448;
+  const footY = 452;
   ctx.fillStyle = dim;
   ctx.font = `bold 18px ${ff}`;
-  ctx.fillText('CUSTOM ROOM', X + 60, footY);
-  ctx.fillText('ESPORT', X + 430, footY);
+  ctx.fillText((secondaryName || '').toUpperCase(), X + 30, footY);
   ctx.font = `600 16px ${ff}`;
-  ctx.fillText(`${fmtNum(amo.totalPoints || 0)} pts · ${amo.wins || 0}W / ${amo.losses || 0}L`, X + 60, footY + 28);
-  ctx.fillText(`${fmtNum(esp.totalPoints || 0)} pts · ${esp.wins || 0}W / ${esp.losses || 0}L`, X + 430, footY + 28);
+  ctx.fillText(`${fmtNum(secPts)} pts · ${secWins}W / ${secLosses}L · ${secondaryRank === null ? 'UNRANKED' : `#${secondaryRank}`}`, X + 30, footY + 28);
 
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
   ctx.font = `600 16px ${ff}`;
@@ -3460,36 +3467,46 @@ async function renderRankCard(member, uid, amo, esp, combinedIdx) {
   return Buffer.from(cv.toBuffer('image/png'));
 }
 
-async function buildRankResponse(message, targetId) {
-  const amo = storage.getPlayerPoints(targetId, 'amo');
-  const esp = storage.getPlayerPoints(targetId, 'esport');
-  const ranked = computeCombinedRanking();
-  const combinedIdx = ranked.findIndex(([id]) => id === targetId);
+function getModeRank(userId, mode) {
+  let data = null;
+  try { data = storage.loadPoints(mode); } catch (e) { data = null; }
+  if (!data || !data.players) return null;
+  const entries = Object.entries(data.players)
+    .filter(([, p]) => (p.totalPoints || 0) > 0 || (p.matchesPlayed || 0) > 0)
+    .sort((a, b) => (b[1].totalPoints || 0) - (a[1].totalPoints || 0) || (b[1].wins || 0) - (a[1].wins || 0) || (b[1].matchesPlayed || 0) - (a[1].matchesPlayed || 0));
+  const idx = entries.findIndex(([id]) => id === userId);
+  return idx === -1 ? null : idx + 1;
+}
+
+async function buildRankResponse(message, targetId, mode) {
+  const otherMode = mode === 'amo' ? 'esport' : 'amo';
+  const st = storage.getPlayerPoints(targetId, mode);
+  const stOther = storage.getPlayerPoints(targetId, otherMode);
+  const rank = getModeRank(targetId, mode);
+  const rankOther = getModeRank(targetId, otherMode);
   const member = (message.guild && (message.guild.members.cache.get(targetId) || await message.guild.members.fetch(targetId).catch(() => null))) || null;
 
   if (canvasLib) {
     try {
-      const buf = await renderRankCard(member, targetId, amo, esp, combinedIdx);
+      const buf = await renderRankCard(member, targetId, st, getModeConfig(mode).displayName, rank, stOther, getModeConfig(otherMode).displayName, rankOther);
       return message.reply({ files: [{ attachment: buf, name: 'rank.png' }] });
     } catch (e) {
       console.log('[RANK] image render failed:', e.message);
     }
   }
   const label = targetId === message.author.id ? 'Your' : `${member ? member.displayName : targetId}`;
-  const combinedPts = (amo.totalPoints || 0) + (esp.totalPoints || 0);
-  const combinedWins = (amo.wins || 0) + (esp.wins || 0);
-  const combinedMatches = (amo.matchesPlayed || 0) + (esp.matchesPlayed || 0);
-  const mvpCount = (amo.mvpCount || 0) + (esp.mvpCount || 0);
-  const winRate = combinedMatches ? Math.round((combinedWins / combinedMatches) * 100) : 0;
+  const cfg = getModeConfig(mode);
+  const matchesTotal = (st.wins || 0) + (st.losses || 0);
+  const winRate = matchesTotal ? Math.round(((st.wins || 0) / matchesTotal) * 100) : 0;
   const embed = new EmbedBuilder()
-    .setTitle(`📊 ${label}'s PROFILE`)
+    .setTitle(`📊 ${label}'s PROFILE — ${cfg.displayName}`)
     .setColor(COLORS.info)
     .setDescription(
-      `**💰 Total points**  ${combinedPts} pts\n` +
-      `${combinedIdx !== -1 ? `**🏅 Rank**  **#${combinedIdx + 1}**\n` : ''}` +
-      `**🏆 Matches**  ${combinedMatches}  (${combinedWins}W / ${combinedMatches - combinedWins}L)\n` +
+      `**💰 Points**  ${st.totalPoints || 0} pts\n` +
+      `${rank !== null ? `**🏅 Rank**  **#${rank}**\n` : ''}` +
+      `**🏆 Matches**  ${matchesTotal}  (${st.wins || 0}W / ${st.losses || 0}L)\n` +
       `**🔢 Win rate**  ${winRate}%\n` +
-      `**⭐ MVP count**  ${mvpCount}`
+      `**⭐ MVP count**  ${st.mvpCount || 0}`
     )
     .setFooter({ text: BRANDING });
   return message.reply({ embeds: [embed] });
@@ -3763,12 +3780,15 @@ if (content === '&applyfix' || content === '!applyfix') {
     let targetId = message.author.id;
     const rest = content.replace(/^!rank\s*/, '').trim();
     const mention = message.mentions.users.first();
-    if (rest) {
+    if (mention) targetId = mention.id;
+    else {
       const m = rest.match(/\d{15,20}/);
-      if (mention) targetId = mention.id;
-      else if (m) targetId = m[0];
+      if (m) targetId = m[0];
     }
-    return buildRankResponse(message, targetId);
+    let rmode = getModeByChannel(message.channel.id);
+    const modeArg = rest.replace(/<@\d+>/g, '').trim().toLowerCase();
+    if (modeArg === 'amo' || modeArg === 'esport') rmode = modeArg;
+    return buildRankResponse(message, targetId, rmode);
   } else if (content === '!leaderboard') {
     await adminCommands.leaderboard(message, mode);
   } else if (content === '!resetpoints') {
