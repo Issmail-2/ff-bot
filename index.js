@@ -2728,7 +2728,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const roomId = interaction.fields.getTextInputValue('roomIdInput').trim();
     const password = interaction.fields.getTextInputValue('passwordInput').trim();
     const matchKey = interaction.fields.getTextInputValue('keyInput').trim();
-    const matchOptions = (interaction.fields.getTextInputValue('optionsInput') || '').trim();
 
     if (![2, 3, 4].includes(match.teamSize)) {
       console.log('[MODAL] invalid team size on match', match.teamSize);
@@ -2747,9 +2746,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
-    match.options = matchOptions;
     match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} options=${matchOptions} creator auto-joined T1`);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
 
     try {
       const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
@@ -2765,7 +2763,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await syncJoinButtons(interaction.guild, match);
       console.log('[MODAL] match box sent successfully, new msg id:', newMsg.id);
 
-      await interaction.editReply({ content: `✅ Match created! You are on 🔴 Team 1.` }).catch(() => {});
+      const optsRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`matchopts_${match.id}`)
+          .setPlaceholder('⚙️ Click to pick match options')
+          .setMinValues(1)
+          .setMaxValues(3)
+          .addOptions(
+            new StringSelectMenuOptionBuilder().setEmoji('🔥').setLabel('Highlight').setDescription('Highlight match').setValue('highlight'),
+            new StringSelectMenuOptionBuilder().setEmoji('💰').setLabel('Apostado').setDescription('Apostado match').setValue('apostado'),
+            new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika')
+          )
+      );
+      const optsEmbed = new EmbedBuilder()
+        .setTitle('⚙️ MATCH OPTIONS')
+        .setColor(COLORS.info)
+        .setDescription('Click to choose the options for this match — you can pick more than one.');
+      await interaction.editReply({ embeds: [optsEmbed], components: [optsRow] }).catch(() => {});
       if (match.configTimeout) {
         clearTimeout(match.configTimeout);
         match.configTimeout = null;
@@ -2805,6 +2819,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const cid = interaction.customId;
     let kind = null;
     let matchId = null;
+
+    if (cid.startsWith('matchopts_')) {
+      const mId = cid.slice('matchopts_'.length);
+      if (!mId) return interaction.reply({ content: '⚠️ Unknown selection.', ephemeral: true });
+      const match = manager.getMatch(mId);
+      if (!match) return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+      const labels = { highlight: 'Highlight', apostado: 'Apostado', zelika: 'Zelika' };
+      match.options = interaction.values.map(v => labels[v] || v).join(', ');
+      manager.persistMatches();
+      await updateResultBox(interaction.guild, match).catch(() => {});
+      return interaction.update({ embeds: [], components: [], content: `✅ Options saved: **${match.options}**.` });
+    }
 
     if (cid.startsWith('matchmenu_')) {
       const mId = cid.slice('matchmenu_'.length);
@@ -3019,16 +3045,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row3 = new ActionRowBuilder().addComponents(keyInput);
 
-      const optionsInput = new TextInputBuilder()
-        .setCustomId('optionsInput')
-        .setLabel('Options (Highlight / Apostado / Zelika)')
-        .setPlaceholder('Optional - e.g. Highlight: H2, Apostado: 500, Zelika: ZK7')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false);
-
-      const row4 = new ActionRowBuilder().addComponents(optionsInput);
-
-      roomModal.addComponents(row1, row2, row3, row4);
+      roomModal.addComponents(row1, row2, row3);
 
       if (match.configTimeout) clearTimeout(match.configTimeout);
       match.configTimeout = setTimeout(() => {
