@@ -375,6 +375,7 @@ The **#1 ranked player** automatically receives the Role #1 role.
 \`!leaderboard\` — show the top players
 \`!balance\` / \`!bal\` — check your points (\`!balance @user\` to check someone else)
 \`!stats [@user]\` — combined stats, rank, win rate and MVP count
+\`!rank [@user]\` — show a rank profile card image with points, rank, W/L and MVP
 
 🛡️ **REPORTS & ROLES**
 Report a cheater in <#1546846855676043264> with the **🛡️ Report Player** button — takes **50 pts**, you get **+100 pts** + a reward role if the player is confirmed.
@@ -384,6 +385,7 @@ Apply for the team in <#1546853674167435294> with the **Apply as Checker / Staff
 ━━━━━━━━━━━━━━━━━━━━━━━━
 🔧 **SUPERVISORS / ADMINS**
 \`!setpoints @user points win/loss\` — adjust a player's points
+\`!giveall <points> p\` — give points to every registered player (e.g. \`!giveall 100 p\`)
 \`!resetpoints\` — reset all points in all modes
 \`!cancelgame @user\` — cancel a player's match
 \`!endcancel\` — force-end a full match and refund points
@@ -3258,6 +3260,241 @@ const adminCommands = {
   }
 };
 
+// ---- Rank card image generation ----
+let canvasLib = null;
+try { canvasLib = require('@napi-rs/canvas'); } catch (e) { canvasLib = null; }
+
+function registerRankCardFonts() {
+  if (!canvasLib) return;
+  try {
+    const paths = [];
+    if (process.platform === 'win32') {
+      paths.push('C:\\Windows\\Fonts\\arialbd.ttf', 'C:\\Windows\\Fonts\\arial.ttf');
+    } else {
+      paths.push(
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf'
+      );
+    }
+    for (const p of paths) {
+      try { canvasLib.GlobalFonts.registerFromPath(p, p.includes('Bold') ? 'CardBold' : 'CardReg'); } catch (e) {}
+    }
+  } catch (e) { console.log('[RANK] font registration error:', e.message); }
+}
+registerRankCardFonts();
+
+function rankCardFontFamily() {
+  if (!canvasLib) return null;
+  try {
+    const fams = (canvasLib.GlobalFonts.families || []).map(f => f.family);
+    if (fams.includes('CardBold')) return 'CardBold';
+    if (fams.includes('Arial')) return 'Arial';
+    if (fams.includes('DejaVu Sans')) return 'DejaVu Sans';
+    if (fams.length) return fams[0];
+  } catch (e) {}
+  return null;
+}
+
+function httpsGetBufferImg(url) {
+  return new Promise((resolve) => {
+    const lib = /^https:/.test(url) ? require('https') : require('http');
+    lib.get(url, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return resolve(null); }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    }).on('error', () => resolve(null));
+  });
+}
+
+async function fetchAvatarBuffer(user) {
+  let url = null;
+  try { url = user.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true }); } catch (e) {}
+  if (!url) return null;
+  try {
+    if (typeof fetch === 'function') {
+      const res = await fetch(url);
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+      return null;
+    }
+  } catch (e) {}
+  return httpsGetBufferImg(url);
+}
+
+function fmtNum(n) { return Number(n || 0).toLocaleString('en-US'); }
+
+async function renderRankCard(member, uid, amo, esp, combinedIdx) {
+  const { createCanvas, loadImage } = canvasLib;
+  const W = 900, H = 500;
+  const cv = createCanvas(W, H);
+  const ctx = cv.getContext('2d');
+
+  const ff = rankCardFontFamily() || 'sans-serif';
+  const accent = '#f5a623';
+  const accent2 = '#5865f2';
+  const white = '#ffffff';
+  const dim = '#9aa7bd';
+
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#0b0f17');
+  bg.addColorStop(0.55, '#161e2c');
+  bg.addColorStop(1, '#0d1420');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.beginPath(); ctx.arc(0, 0, 220, 0, Math.PI * 2); ctx.fillStyle = accent2; ctx.fill();
+  ctx.beginPath(); ctx.arc(W, H, 260, 0, Math.PI * 2); ctx.fillStyle = accent; ctx.fill();
+  ctx.globalAlpha = 0.08;
+  ctx.fillStyle = white;
+  ctx.font = `900 130px ${ff}`;
+  ctx.textBaseline = 'top';
+  ctx.fillText(fmtNum((amo.totalPoints || 0) + (esp.totalPoints || 0)), W - 330, 40);
+  ctx.restore();
+
+  ctx.save();
+  ctx.beginPath(); ctx.arc(140, H / 2, 125, 0, Math.PI * 2); ctx.fillStyle = 'rgba(88,101,242,0.20)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(140, H / 2, 92, 0, Math.PI * 2); ctx.fillStyle = '#1b2430'; ctx.fill();
+  let avatar = null;
+  if (member && member.user) avatar = await fetchAvatarBuffer(member.user);
+  if (avatar) {
+    try {
+      const img = await loadImage(avatar);
+      ctx.beginPath(); ctx.arc(140, H / 2, 92, 0, Math.PI * 2); ctx.closePath(); ctx.clip();
+      ctx.drawImage(img, 140 - 92, H / 2 - 92, 184, 184);
+    } catch (e) { console.log('[RANK] avatar draw error:', e.message); }
+  } else {
+    ctx.font = `700 60px ${ff}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = accent;
+    ctx.fillText('?', 140, H / 2);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+  }
+  ctx.restore();
+
+  ctx.beginPath(); ctx.arc(140, H / 2, 92, 0, Math.PI * 2);
+  ctx.strokeStyle = accent2; ctx.lineWidth = 4; ctx.stroke();
+
+  const X = 285;
+  const name = member ? (member.displayName || member.user.username) : uid;
+  ctx.fillStyle = white;
+  ctx.font = `bold 38px ${ff}`;
+  ctx.textBaseline = 'top';
+  ctx.fillText(name.slice(0, 22), X, 78);
+
+  ctx.fillStyle = accent;
+  ctx.font = `bold 24px ${ff}`;
+  ctx.fillText('RANK', X, 128);
+  ctx.fillStyle = white;
+  ctx.font = `bold 48px ${ff}`;
+  ctx.fillText(combinedIdx === -1 ? 'UNRANKED' : `#${combinedIdx + 1}`, X + 100, 118);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(X, 185); ctx.lineTo(W - 60, 185); ctx.stroke();
+
+  const totalPts = fmtNum((amo.totalPoints || 0) + (esp.totalPoints || 0));
+  ctx.fillStyle = white;
+  ctx.font = `bold 58px ${ff}`;
+  const ptsW = ctx.measureText(totalPts).width;
+  ctx.fillText(totalPts, X, 210);
+  ctx.fillStyle = accent;
+  ctx.font = `bold 22px ${ff}`;
+  ctx.fillText('PTS', X + ptsW + 14, 238);
+
+  const totalWins = (amo.wins || 0) + (esp.wins || 0);
+  const totalLosses = (amo.losses || 0) + (esp.losses || 0);
+  const totalMatches = totalWins + totalLosses;
+  const winRate = totalMatches ? Math.round((totalWins / totalMatches) * 100) : 0;
+
+  ctx.fillStyle = accent2;
+  ctx.font = `bold 22px ${ff}`;
+  ctx.fillText('W', X, 300);
+  ctx.fillStyle = white;
+  ctx.font = `bold 34px ${ff}`;
+  ctx.fillText(String(totalWins), X + 32, 292);
+  ctx.fillStyle = '#ff6b6b';
+  ctx.font = `bold 22px ${ff}`;
+  ctx.fillText('L', X + 110, 300);
+  ctx.fillStyle = white;
+  ctx.font = `bold 34px ${ff}`;
+  ctx.fillText(String(totalLosses), X + 142, 292);
+  ctx.fillStyle = dim;
+  ctx.font = `600 20px ${ff}`;
+  ctx.fillText(`${totalMatches} MATCHES`, X + 230, 302);
+
+  const mvp = (amo.mvpCount || 0) + (esp.mvpCount || 0);
+  ctx.fillStyle = accent;
+  ctx.font = `bold 20px ${ff}`;
+  ctx.fillText('WIN RATE', X, 360);
+  ctx.fillStyle = white;
+  ctx.font = `bold 32px ${ff}`;
+  ctx.fillText(`${winRate}%`, X + 130, 354);
+  ctx.fillStyle = accent2;
+  ctx.font = `bold 20px ${ff}`;
+  ctx.fillText('MVP', X, 410);
+  ctx.fillStyle = white;
+  ctx.font = `bold 32px ${ff}`;
+  ctx.fillText(String(mvp), X + 60, 404);
+
+  const footY = 448;
+  ctx.fillStyle = dim;
+  ctx.font = `bold 18px ${ff}`;
+  ctx.fillText('CUSTOM ROOM', X + 60, footY);
+  ctx.fillText('ESPORT', X + 430, footY);
+  ctx.font = `600 16px ${ff}`;
+  ctx.fillText(`${fmtNum(amo.totalPoints || 0)} pts · ${amo.wins || 0}W / ${amo.losses || 0}L`, X + 60, footY + 28);
+  ctx.fillText(`${fmtNum(esp.totalPoints || 0)} pts · ${esp.wins || 0}W / ${esp.losses || 0}L`, X + 430, footY + 28);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = `600 16px ${ff}`;
+  ctx.textAlign = 'right';
+  ctx.fillText('AVENGERS GAME BOT', W - 60, H - 42);
+  ctx.textAlign = 'left';
+
+  return Buffer.from(cv.toBuffer('image/png'));
+}
+
+async function buildRankResponse(message, targetId) {
+  const amo = storage.getPlayerPoints(targetId, 'amo');
+  const esp = storage.getPlayerPoints(targetId, 'esport');
+  const ranked = computeCombinedRanking();
+  const combinedIdx = ranked.findIndex(([id]) => id === targetId);
+  const member = (message.guild && (message.guild.members.cache.get(targetId) || await message.guild.members.fetch(targetId).catch(() => null))) || null;
+
+  if (canvasLib) {
+    try {
+      const buf = await renderRankCard(member, targetId, amo, esp, combinedIdx);
+      return message.reply({ files: [{ attachment: buf, name: 'rank.png' }] });
+    } catch (e) {
+      console.log('[RANK] image render failed:', e.message);
+    }
+  }
+  const label = targetId === message.author.id ? 'Your' : `${member ? member.displayName : targetId}`;
+  const combinedPts = (amo.totalPoints || 0) + (esp.totalPoints || 0);
+  const combinedWins = (amo.wins || 0) + (esp.wins || 0);
+  const combinedMatches = (amo.matchesPlayed || 0) + (esp.matchesPlayed || 0);
+  const mvpCount = (amo.mvpCount || 0) + (esp.mvpCount || 0);
+  const winRate = combinedMatches ? Math.round((combinedWins / combinedMatches) * 100) : 0;
+  const embed = new EmbedBuilder()
+    .setTitle(`📊 ${label}'s PROFILE`)
+    .setColor(COLORS.info)
+    .setDescription(
+      `**💰 Total points**  ${combinedPts} pts\n` +
+      `${combinedIdx !== -1 ? `**🏅 Rank**  **#${combinedIdx + 1}**\n` : ''}` +
+      `**🏆 Matches**  ${combinedMatches}  (${combinedWins}W / ${combinedMatches - combinedWins}L)\n` +
+      `**🔢 Win rate**  ${winRate}%\n` +
+      `**⭐ MVP count**  ${mvpCount}`
+    )
+    .setFooter({ text: BRANDING });
+  return message.reply({ embeds: [embed] });
+}
+
 client.on(Events.MessageCreate, async (message) => {
   try {
   if (message.author.bot) return;
@@ -3363,6 +3600,26 @@ if (content === '&applyfix' || content === '!applyfix') {
     applyRankNicknames(message.guild).catch(() => {});
     refreshCombinedLeaderboard(message.guild);
     return message.reply(`❌ Removed **${points} pts** from <@${userId}> (${mode}). New total: **${total} pts**.`);
+  }
+
+  if (content === '!giveall' || content.startsWith('!giveall ')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can use this!');
+    }
+    const args = message.content.trim().split(/\s+/);
+    const amt = parseInt(args[1]);
+    if (isNaN(amt) || amt <= 0) {
+      return message.reply('Usage: `!giveall <point> p`\nExample: `!giveall 100 p` gives **100 pts** to every registered player.');
+    }
+    const gm = getModeByChannel(message.channel.id);
+    let data = null;
+    try { data = storage.loadPoints(gm); } catch (e) { data = null; }
+    const ids = Object.keys((data && data.players) || {});
+    if (!ids.length) return message.reply(`ℹ️ No players are registered yet in **${getModeConfig(gm).displayName}** points.`);
+    for (const id of ids) storage.adjustPoints(id, amt, gm);
+    applyRankNicknames(message.guild).catch(() => {});
+    refreshCombinedLeaderboard(message.guild);
+    return message.reply(`✅ Gave **${fmtNum(amt)} pts** to **${ids.length}** player(s) in **${getModeConfig(gm).displayName}**!`);
   }
 
   if (content.startsWith('!storeadd')) {
@@ -3502,6 +3759,16 @@ if (content === '&applyfix' || content === '!applyfix') {
       )
       .setFooter({ text: BRANDING });
     return message.reply({ embeds: [embed] });
+  } else if (content === '!rank' || content.startsWith('!rank ')) {
+    let targetId = message.author.id;
+    const rest = content.replace(/^!rank\s*/, '').trim();
+    const mention = message.mentions.users.first();
+    if (rest) {
+      const m = rest.match(/\d{15,20}/);
+      if (mention) targetId = mention.id;
+      else if (m) targetId = m[0];
+    }
+    return buildRankResponse(message, targetId);
   } else if (content === '!leaderboard') {
     await adminCommands.leaderboard(message, mode);
   } else if (content === '!resetpoints') {
