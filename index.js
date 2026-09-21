@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Events, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionsBitField, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Events, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, LabelBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionsBitField, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 let config;
 try { config = require('./config.json'); } catch { config = {}; }
 if (process.env.DISCORD_TOKEN) config.token = process.env.DISCORD_TOKEN;
@@ -971,8 +971,9 @@ async function handleResetVotes(interaction, match) {
 }
 
 function mvpPlayerOptions(guild, match, excludeId) {
-  const picks = [...(match.team1 || []).slice(0, 2), ...(match.team2 || []).slice(0, 2)]
-    .filter(id => !excludeId || id !== excludeId);
+  const pool = [...new Set([...(match.team1 || []), ...(match.team2 || [])])]
+    .filter(id => id && !excludeId !== undefined ? id !== excludeId : true);
+  const picks = pool.filter(id => id && (!excludeId || id !== excludeId));
   return picks.map(id => {
     const member = guild.members.cache.get(id);
     const name = member ? (member.displayName || member.user.username) : id;
@@ -2757,11 +2758,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.editReply({ content: `❌ **Only numbers!** ${invalidFields.join(', ')} must contain numbers only.` });
     }
 
+    const typeLabels = { highlight: 'Highlight', apostado: 'Apostado', zelika: 'Zelika' };
+    let selectedTypes = [];
+    try {
+      if (interaction.fields.fields.has('matchTypeSelect')) {
+        selectedTypes = interaction.fields.getStringSelectValues('matchTypeSelect') || [];
+      }
+    } catch (e) {
+      selectedTypes = [];
+    }
+    const optionsText = selectedTypes.map(v => typeLabels[v] || v).join(', ');
+
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
+    match.options = optionsText || undefined;
     match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} options=${optionsText || '—'} creator auto-joined T1`);
 
     try {
       const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
@@ -2777,23 +2790,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await syncJoinButtons(interaction.guild, match);
       console.log('[MODAL] match box sent successfully, new msg id:', newMsg.id);
 
-      const optsRow = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`matchopts_${match.id}`)
-          .setPlaceholder('⚙️ Click to pick match options')
-          .setMinValues(1)
-          .setMaxValues(3)
-          .addOptions(
-            new StringSelectMenuOptionBuilder().setEmoji('🔥').setLabel('Highlight').setDescription('Highlight match').setValue('highlight'),
-            new StringSelectMenuOptionBuilder().setEmoji('💰').setLabel('Apostado').setDescription('Apostado match').setValue('apostado'),
-            new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika')
-          )
-      );
-      const optsEmbed = new EmbedBuilder()
-        .setTitle('⚙️ MATCH OPTIONS')
-        .setColor(COLORS.info)
-        .setDescription('Click to choose the options for this match — you can pick more than one.');
-      await interaction.editReply({ embeds: [optsEmbed], components: [optsRow] }).catch(() => {});
+      await interaction.editReply({
+        content: match.options
+          ? `✅ Room config saved. Match type: **${match.options}**.`
+          : '✅ Room config saved.'
+      }).catch(() => {});
       if (match.configTimeout) {
         clearTimeout(match.configTimeout);
         match.configTimeout = null;
@@ -2833,18 +2834,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const cid = interaction.customId;
     let kind = null;
     let matchId = null;
-
-    if (cid.startsWith('matchopts_')) {
-      const mId = cid.slice('matchopts_'.length);
-      if (!mId) return interaction.reply({ content: '⚠️ Unknown selection.', ephemeral: true });
-      const match = manager.getMatch(mId);
-      if (!match) return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
-      const labels = { highlight: 'Highlight', apostado: 'Apostado', zelika: 'Zelika' };
-      match.options = interaction.values.map(v => labels[v] || v).join(', ');
-      manager.persistMatches();
-      await updateResultBox(interaction.guild, match).catch(() => {});
-      return interaction.update({ embeds: [], components: [], content: `✅ Options saved: **${match.options}**.` });
-    }
 
     if (cid.startsWith('matchmenu_')) {
       const mId = cid.slice('matchmenu_'.length);
@@ -3081,7 +3070,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row3 = new ActionRowBuilder().addComponents(keyInput);
 
-      roomModal.addComponents(row1, row2, row3);
+      const typeSelect = new StringSelectMenuBuilder()
+        .setCustomId('matchTypeSelect')
+        .setPlaceholder('Choose one or more (optional)')
+        .setMinValues(0)
+        .setMaxValues(3)
+        .addOptions(
+          new StringSelectMenuOptionBuilder().setEmoji('🔥').setLabel('Highlight').setDescription('Highlight match').setValue('highlight'),
+          new StringSelectMenuOptionBuilder().setEmoji('💰').setLabel('Apostado').setDescription('Apostado match').setValue('apostado'),
+          new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika')
+        );
+      const typeLabel = new LabelBuilder()
+        .setLabel('Match type (optional)')
+        .setDescription('Pick Highlight, Apostado and/or Zelika')
+        .setStringSelectMenuComponent(typeSelect);
+
+      roomModal.addComponents(row1, row2, row3, typeLabel);
 
       if (match.configTimeout) clearTimeout(match.configTimeout);
       match.configTimeout = setTimeout(() => {

@@ -843,6 +843,21 @@ async function finishMatch(guild, match) {
   console.log(`[VOICE] match ${match.id} finished — restored ${restored.restored}/${restored.total}, channels cleaned up`);
 }
 
+async function clearVoiceChannelMessages(guild, channelId) {
+  try {
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel || typeof channel.messages?.fetch !== 'function') return;
+    const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!msgs || msgs.size === 0) return;
+    await channel.bulkDelete(msgs, true).catch(async () => {
+      for (const m of msgs.values()) await m.delete().catch(() => {});
+    });
+    console.log(`[VOICE] cleared ${msgs.size} leftover message(s) in team voice channel ${channelId}`);
+  } catch (e) {
+    console.log(`[VOICE] could not clear messages in ${channelId}: ${e.message}`);
+  }
+}
+
 async function deleteVoiceChannels(guild, match) {
   const allPlayers = [...new Set([...(match.team1 || []), ...(match.team2 || [])])];
   match.closing = true;
@@ -851,6 +866,7 @@ async function deleteVoiceChannels(guild, match) {
   if (match.usePool) {
     const mode = match.mode || 'amo';
     for (const channelId of match.voiceChannels) {
+      await clearVoiceChannelMessages(guild, channelId);
       await deactivatePoolChannel(guild, channelId);
     }
     releasePoolInUse(mode, match.voiceChannels);
@@ -863,6 +879,7 @@ async function deleteVoiceChannels(guild, match) {
 
   for (const channelId of match.voiceChannels) {
     try {
+      await clearVoiceChannelMessages(guild, channelId);
       const channel = guild.channels.cache.get(channelId);
       if (channel) await channel.delete();
     } catch (e) {
