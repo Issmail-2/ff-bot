@@ -2786,7 +2786,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     const typeLabels = MATCH_TYPE_LABELS;
-    const optionsText = match.options || '';
+    const selectedSet = new Set();
+    (match.options || '').split(',').map(s => s.trim()).forEach(lbl => {
+      const k = Object.keys(typeLabels).find(x => typeLabels[x] === lbl);
+      if (k) selectedSet.add(k);
+    });
+    let modalTypesRaw = '';
+    try { modalTypesRaw = interaction.fields.getTextInputValue('matchTypeInput') || ''; } catch {}
+    modalTypesRaw.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).forEach(w => {
+      const mapped = w === '1' ? 'highlight' : w === '2' ? 'apostado' : w === '3' ? 'zelika' : w === '4' ? 'amo' : w;
+      if (typeLabels[mapped]) selectedSet.add(mapped);
+    });
+    const optionsText = Array.from(selectedSet).map(v => typeLabels[v]).join(', ');
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
@@ -3107,7 +3118,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row3 = new ActionRowBuilder().addComponents(keyInput);
 
-      roomModal.addComponents(row1, row2, row3);
+      const typeInput = new TextInputBuilder()
+        .setCustomId('matchTypeInput')
+        .setLabel('Match Type (optional)')
+        .setDescription('Highlight, Apostado, Zelika, AMO — e.g. highlight, amo')
+        .setPlaceholder('e.g. highlight, apostado, amo — or leave empty')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false);
+
+      const row4 = new ActionRowBuilder().addComponents(typeInput);
+
+      roomModal.addComponents(row1, row2, row3, row4);
 
       if (match.configTimeout) clearTimeout(match.configTimeout);
       match.configTimeout = setTimeout(() => {
