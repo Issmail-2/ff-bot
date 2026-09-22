@@ -661,6 +661,49 @@ function teamPanel(ids, matchMode, size, guild) {
   }).join('\n');
 }
 
+const MATCH_TYPE_LABELS = { highlight: 'Highlight', apostado: 'Apostado', zelika: 'Zelika', amo: 'AMO' };
+
+function buildMatchTypeRow(match) {
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`matchtype_${match.id}`)
+      .setPlaceholder(match.options ? `Type: ${match.options}` : 'Select match type (optional)')
+      .setMinValues(0)
+      .setMaxValues(4)
+      .addOptions(
+        new StringSelectMenuOptionBuilder().setEmoji('🔥').setLabel('Highlight').setDescription('Highlight match').setValue('highlight'),
+        new StringSelectMenuOptionBuilder().setEmoji('💰').setLabel('Apostado').setDescription('Apostado match').setValue('apostado'),
+        new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika'),
+        new StringSelectMenuOptionBuilder().setEmoji('🎮').setLabel('AMO').setDescription('AMO match').setValue('amo')
+      )
+  );
+}
+
+function buildSetupMessageParts(match, hostId) {
+  const embed = new EmbedBuilder()
+    .setTitle(`👾 __Free Fire ${match.teamSize}v${match.teamSize} Match__`)
+    .setDescription(
+      `Match started by <@${hostId}>\n\n` +
+      `Press **Set Room Config** below to enter your room details, then players use the buttons to lock their slots.` +
+      (match.options ? `\n\n🎮 **Match type:** ${match.options}` : '\n\n🎮 **Match type:** *tap the dropdown above to choose (optional)*')
+    )
+    .setColor('#2F3136')
+    .setFooter({ text: BRANDING });
+  const buttons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`setup_${match.id}`)
+      .setEmoji('⚙️')
+      .setLabel('Set Room Config')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`cancel_${match.id}`)
+      .setEmoji('❌')
+      .setLabel('Cancel Match')
+      .setStyle(ButtonStyle.Danger)
+  );
+  return { embeds: [embed], components: [buttons, buildMatchTypeRow(match)] };
+}
+
 function buildMatchBoxEmbed(guild, match, creatorUser) {
   const mode = match.mode || 'amo';
   const size = match.teamSize || 2;
@@ -676,6 +719,10 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
       { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field || '*Empty*', inline: true }
     )
     .setFooter({ text: BRANDING });
+
+  if (match.options) {
+    embed.addFields({ name: '🎮 Match type', value: match.options, inline: false });
+  }
 
   return embed;
 }
@@ -2406,29 +2453,8 @@ client.on(Events.MessageCreate, async (message) => {
 
     const match = manager.createMatch(message.author.id, teamSize, message.channel.id, mode);
 
-    const setupEmbed = new EmbedBuilder()
-      .setTitle(`👾 __Free Fire ${teamSize}v${teamSize} Match__`)
-      .setDescription(
-        `Match started by <@${message.author.id}>\n\n` +
-        `Press **Set Room Config** below to enter your room details, then players use the buttons to lock their slots.`
-      )
-      .setColor('#2F3136')
-      .setFooter({ text: BRANDING });
-
-    const setupButton = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`setup_${match.id}`)
-        .setEmoji('⚙️')
-        .setLabel('Set Room Config')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`cancel_${match.id}`)
-        .setEmoji('❌')
-        .setLabel('Cancel Match')
-        .setStyle(ButtonStyle.Danger)
-    );
-
-    const msg = await message.reply({ embeds: [setupEmbed], components: [setupButton] });
+    const parts = buildSetupMessageParts(match, message.author.id);
+    const msg = await message.reply({ embeds: parts.embeds, components: parts.components });
     match.message = msg.id;
     return;
   }
@@ -2759,17 +2785,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.editReply({ content: `❌ **Only numbers!** ${invalidFields.join(', ')} must contain numbers only.` });
     }
 
-    const typeLabels = { highlight: 'Highlight', apostado: 'Apostado', zelika: 'Zelika', amo: 'AMO' };
-    let selectedTypes = [];
-    try {
-      if (interaction.fields.fields.has('matchTypeSelect')) {
-        selectedTypes = interaction.fields.getStringSelectValues('matchTypeSelect') || [];
-      }
-    } catch (e) {
-      selectedTypes = [];
-    }
-    const optionsText = selectedTypes.map(v => typeLabels[v] || v).join(', ');
-
+    const typeLabels = MATCH_TYPE_LABELS;
+    const optionsText = match.options || '';
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
@@ -2829,6 +2846,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isStringSelectMenu()) {
+    if (interaction.customId.startsWith('matchtype_')) {
+      const matchId = interaction.customId.slice('matchtype_'.length);
+      const match = manager.getMatch(matchId);
+      if (!match) {
+        return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
+      }
+      if (match.creatorId !== interaction.user.id) {
+        return interaction.reply({ content: '❌ Only the match host can set the type.', ephemeral: true });
+      }
+      match.options = interaction.values.map(v => MATCH_TYPE_LABELS[v] || v).join(', ');
+      manager.persistMatches();
+      const parts = buildSetupMessageParts(match, match.creatorId);
+      try {
+        await interaction.update({ embeds: parts.embeds, components: parts.components });
+      } catch (e) {
+        errLog('matchtype update failed for match ' + match.id, e);
+      }
+      return;
+    }
     if (interaction.customId === 'store_menu') {
       return handleBuy(interaction, interaction.values[0]);
     }
@@ -3071,20 +3107,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row3 = new ActionRowBuilder().addComponents(keyInput);
 
-      const typeSelect = new StringSelectMenuBuilder()
-        .setCustomId('matchTypeSelect')
-        .setPlaceholder('Choose one or more (optional)')
-        .setMinValues(0)
-        .setMaxValues(4)
-        .addOptions(
-          new StringSelectMenuOptionBuilder().setEmoji('🔥').setLabel('Highlight').setDescription('Highlight match').setValue('highlight'),
-          new StringSelectMenuOptionBuilder().setEmoji('💰').setLabel('Apostado').setDescription('Apostado match').setValue('apostado'),
-          new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika'),
-          new StringSelectMenuOptionBuilder().setEmoji('🎮').setLabel('AMO').setDescription('AMO match').setValue('amo')
-        );
-      const typeRow = new ActionRowBuilder().addComponents(typeSelect);
-
-      roomModal.addComponents(row1, row2, row3, typeRow);
+      roomModal.addComponents(row1, row2, row3);
 
       if (match.configTimeout) clearTimeout(match.configTimeout);
       match.configTimeout = setTimeout(() => {
