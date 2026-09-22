@@ -2758,7 +2758,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.editReply({ content: `❌ **Only numbers!** ${invalidFields.join(', ')} must contain numbers only.` });
     }
 
-    const typeLabels = { highlight: 'Highlight', apostado: 'Apostado', zelika: 'Zelika' };
+    const typeLabels = { highlight: 'Highlight', apostado: 'Apostado', zelika: 'Zelika', amo: 'AMO' };
     let selectedTypes = [];
     try {
       if (interaction.fields.fields.has('matchTypeSelect')) {
@@ -3074,15 +3074,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setCustomId('matchTypeSelect')
         .setPlaceholder('Choose one or more (optional)')
         .setMinValues(0)
-        .setMaxValues(3)
+        .setMaxValues(4)
         .addOptions(
           new StringSelectMenuOptionBuilder().setEmoji('🔥').setLabel('Highlight').setDescription('Highlight match').setValue('highlight'),
           new StringSelectMenuOptionBuilder().setEmoji('💰').setLabel('Apostado').setDescription('Apostado match').setValue('apostado'),
-          new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika')
+          new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika'),
+          new StringSelectMenuOptionBuilder().setEmoji('🎮').setLabel('AMO').setDescription('AMO match').setValue('amo')
         );
       const typeLabel = new LabelBuilder()
         .setLabel('Match type (optional)')
-        .setDescription('Pick Highlight, Apostado and/or Zelika')
+        .setDescription('Pick Highlight, Apostado, Zelika and/or AMO')
         .setStringSelectMenuComponent(typeSelect);
 
       roomModal.addComponents(row1, row2, row3, typeLabel);
