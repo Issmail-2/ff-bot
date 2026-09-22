@@ -3121,8 +3121,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const typeInput = new TextInputBuilder()
         .setCustomId('matchTypeInput')
         .setLabel('Match Type (optional)')
-        .setDescription('Highlight, Apostado, Zelika, AMO — e.g. highlight, amo')
-        .setPlaceholder('e.g. highlight, apostado, amo — or leave empty')
+        .setPlaceholder('Highlight, Apostado, Zelika, AMO (e.g. highlight, amo)')
         .setStyle(TextInputStyle.Short)
         .setRequired(false);
 
