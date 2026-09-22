@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Events, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, LabelBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionsBitField, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Events, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, PermissionsBitField, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 let config;
 try { config = require('./config.json'); } catch { config = {}; }
 if (process.env.DISCORD_TOKEN) config.token = process.env.DISCORD_TOKEN;
@@ -2684,7 +2684,8 @@ async function performJoin(interaction, match, team) {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-  if (interaction.isButton() && interaction.customId === 'apply_start_checker') {
+    console.log(`[IN] ${new Date().toISOString()} type=${interaction.type} cid=${interaction.isCommand() ? interaction.commandName : (interaction.customId || '')} user=${interaction.user ? interaction.user.id : ''} ch=${interaction.channelId}`);
+    if (interaction.isButton() && interaction.customId === 'apply_start_checker') {
     return handleApplyStart(interaction, 'checker');
   }
   if (interaction.isButton() && interaction.customId === 'apply_start_staff') {
@@ -3081,19 +3082,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
           new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika'),
           new StringSelectMenuOptionBuilder().setEmoji('🎮').setLabel('AMO').setDescription('AMO match').setValue('amo')
         );
-      const typeLabel = new LabelBuilder()
-        .setLabel('Match type (optional)')
-        .setDescription('Pick Highlight, Apostado, Zelika and/or AMO')
-        .setStringSelectMenuComponent(typeSelect);
+      const typeRow = new ActionRowBuilder().addComponents(typeSelect);
 
-      roomModal.addComponents(row1, row2, row3, typeLabel);
+      roomModal.addComponents(row1, row2, row3, typeRow);
 
       if (match.configTimeout) clearTimeout(match.configTimeout);
       match.configTimeout = setTimeout(() => {
         timeoutMatch(interaction.guild, match.id, 'config');
       }, 30 * 1000);
 
-      return interaction.showModal(roomModal);
+      try {
+        await interaction.showModal(roomModal);
+        console.log(`[MODAL] room modal presented for match ${match.id} by ${interaction.user.id}`);
+      } catch (e) {
+        errLog('showModal(room) failed for match ' + match.id, e);
+        try { await interaction.reply({ content: '❌ Could not open the room config modal. Please try again.', ephemeral: true }); } catch {}
+      }
+      return;
     }
 
     if (action === 'join1' || action === 'join2') {
@@ -3122,7 +3127,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       keyModal.addComponents(keyRow);
 
-      return interaction.showModal(keyModal);
+      try {
+        await interaction.showModal(keyModal);
+      } catch (e) {
+        errLog('showModal(key) failed for match ' + match.id, e);
+        try { await interaction.reply({ content: '❌ Could not open the key modal. Please try again.', ephemeral: true }); } catch {}
+      }
+      return;
     }
 
     if (action === 'mvpvote' || action === 'mvpwinner' || action === 'mvploser') {
