@@ -649,26 +649,30 @@ async function ensureEsportChannels(guild) {
 function teamPanel(ids, matchMode, size, guild) {
   return Array.from({ length: size || ids.length }, (_, i) => {
     const uid = ids[i];
-    if (!uid) return '▫️ ─ *Empty slot*';
+    if (!uid) return `${i + 1}. ▫️ *Empty slot*`;
     const badge = storage.getRankBadge(uid, matchMode);
-    const crown = i === 0 ? '👑' : '▫️';
+    const lead = i === 0 ? '👑' : `${i + 1}.`;
     let name = 'User';
     if (guild) {
       const member = guild.members.cache.get(uid);
       if (member) name = member.displayName || member.user.username;
     }
-    return `${crown} ${name}${badge ? ` \`[${badge}]\`` : ''}`;
+    return `${lead} ${name}${badge ? ` \`[${badge}]\`` : ''}`;
   }).join('\n');
 }
 
 function buildSetupMessageParts(match, hostId) {
+  const ts = Math.floor(Date.now() / 1000);
   const embed = new EmbedBuilder()
-    .setTitle(`👾 __Free Fire ${match.teamSize}v${match.teamSize} Match__`)
+    .setTitle(`${config.emojis.game} Free Fire Custom • ${match.teamSize}v${match.teamSize}`)
+    .setColor(0x2B2D31)
     .setDescription(
-      `Match started by <@${hostId}>\n\n` +
-      `Press **Set Room Config** below to enter your room details, then players use the buttons to lock their slots.`
+      `**Match host** — <@${hostId}>\n` +
+      `**Status** — ⏳ *awaiting room config*\n` +
+      `**Created** — <t:${ts}:R>\n\n` +
+      `> Press **⚙️ Set Room Config** to enter the room ID and password.\n` +
+      `> Players then use the buttons to lock their slots.`
     )
-    .setColor('#2F3136')
     .setFooter({ text: BRANDING });
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -690,14 +694,24 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const size = match.teamSize || 2;
   const t1Field = teamPanel(match.team1, mode, size, guild);
   const t2Field = teamPanel(match.team2, mode, size, guild);
+  const filled1 = (match.team1 || []).length;
+  const filled2 = (match.team2 || []).length;
+  const total = size * 2;
+  const joined = filled1 + filled2;
+  const pending = Math.max(0, total - joined);
+  const ts = Math.floor(Date.now() / 1000);
 
   const embed = new EmbedBuilder()
-    .setTitle('🎮 TEAM SELECTION')
-    .setColor('#2B2D31')
-    .setDescription(`Choose your team for this **${match.teamSize}v${match.teamSize}** match.`)
+    .setTitle(`${config.emojis.game} Team Selection • ${size}v${size}`)
+    .setColor(COLORS.primary)
+    .setDescription(
+      `**Host** — <@${match.creatorId}>\n` +
+      `**Slots** — \`${joined}/${total}\` filled${pending === 0 ? ' • ✅ Match full' : ` • ⏳ ${pending} waiting`}\n` +
+      `**Started** — <t:${ts}:R>`
+    )
     .addFields(
-      { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: t1Field || '*Empty*', inline: true },
-      { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field || '*Empty*', inline: true }
+      { name: `${config.emojis.team1} TEAM 1 — \`${filled1}/${size}\``, value: t1Field || '*No players yet*', inline: true },
+      { name: `${config.emojis.team2} TEAM 2 — \`${filled2}/${size}\``, value: t2Field || '*No players yet*', inline: true }
     )
     .setFooter({ text: BRANDING });
 
@@ -720,16 +734,16 @@ async function updateMatchChannel(guild, match) {
     return badge ? `${getName(id)} \`[${badge}]\`` : getName(id);
   }).join('\n') : 'Empty';
   const embed = new EmbedBuilder()
-    .setTitle(`🏠 ROOM INFO`)
-    .setColor(COLORS.primary)
+    .setTitle(`${config.emojis.game} Room Details`)
+    .setColor(COLORS.gold)
     .setDescription(
-      `**▫️ Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
-      `**▫️ Password** _(hover to copy)_\n\`\`\`${match.password || '—'}\`\`\`\n` +
-      `**▫️ Match Key** _(hover to copy)_\n\`\`\`${match.key || '—'}\`\`\``
+      `**🔑 Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
+      `**🔒 Password** _(hover to copy)_\n\`\`\`${match.password || '—'}\`\`\`` +
+      (match.key ? `\n**🗝️ Join Key**\n\`\`\`${match.key}\`\`\`` : '')
     )
     .addFields(
-      { name: `${config.emojis.team1} TEAM 1 — \`${match.team1.length}/${match.teamSize}\``, value: list1 || '*Empty*', inline: true },
-      { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: list2 || '*Empty*', inline: true }
+      { name: `${config.emojis.team1} TEAM 1 — \`${(match.team1 || []).length}/${match.teamSize}\``, value: list1 || '*Empty*', inline: true },
+      { name: `${config.emojis.team2} TEAM 2 — \`${(match.team2 || []).length}/${match.teamSize}\``, value: list2 || '*Empty*', inline: true }
     )
     .setFooter({ text: BRANDING });
   await channel.messages.fetch({ limit: 20 }).catch(() => {});
@@ -1032,12 +1046,12 @@ function buildMainMatchEmbed(match, guild) {
   ];
 
   return new EmbedBuilder()
-    .setTitle(`${config.emojis.game} CUSTOM ROOM`)
-    .setColor(COLORS.gold)
+    .setTitle(`${config.emojis.game} Custom Room • ${match.teamSize}v${match.teamSize} • ${display}`)
+    .setColor(COLORS.primary)
     .setDescription(
       `${pingBlock ? `📣 ${pingBlock}\n\n` : ''}` +
-      `🔑 **Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
-      `🔒 **Password** _(hover to copy)_\n\`\`\`${match.password}\`\`\``
+      `**🔑 Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
+      `**🔒 Password** _(hover to copy)_\n\`\`\`${match.password}\`\`\``
     )
     .addFields(fields)
     .setFooter({ text: BRANDING });
@@ -1113,12 +1127,14 @@ async function startFullMatch(guild, match) {
 function buildMatchButtons(match, userId) {
   const joinTeam1 = new ButtonBuilder()
     .setCustomId(`join1_${match.id}`)
-    .setLabel('TEAM 1')
-    .setStyle(ButtonStyle.Secondary);
+    .setEmoji(config.emojis.team1)
+    .setLabel(`Join Team 1 (${match.team1 ? match.team1.length : 0}/${match.teamSize})`)
+    .setStyle(ButtonStyle.Primary);
 
   const joinTeam2 = new ButtonBuilder()
     .setCustomId(`join2_${match.id}`)
-    .setLabel('TEAM 2')
+    .setEmoji(config.emojis.team2)
+    .setLabel(`Join Team 2 (${match.team2 ? match.team2.length : 0}/${match.teamSize})`)
     .setStyle(ButtonStyle.Secondary);
 
   const buttons = [joinTeam1, joinTeam2];
