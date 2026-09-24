@@ -778,6 +778,7 @@ async function cancelMatch(guild, match, cancelText) {
     if (msg) await msg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
   }
   await clearJoinButtons(guild, match);
+  await clearVotePanel(guild, match);
   const roomChannel = guild.channels.cache.get(match.channelId2);
   if (roomChannel) {
     if (match.resultMessageId && match.resultMessageId !== match.message) {
@@ -895,8 +896,7 @@ async function handleStaffReq(interaction, match) {
 function isMvpVoter(match, member) {
   if (!member) return false;
   const captains = [match.team1[0], match.team2[0]].filter(Boolean);
-  if (captains.includes(member.id)) return true;
-  return [...(config.matchViewerRoles || []), ...(config.matchPingRoles || [])].some(rid => rid && member.roles.cache.has(rid));
+  return captains.includes(member.id);
 }
 
 async function handleMvpVote(interaction, match) {
@@ -904,7 +904,9 @@ async function handleMvpVote(interaction, match) {
     return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
   }
   if (!isMvpVoter(match, interaction.member)) {
-    return interaction.reply({ content: '❌ Only the **first player of each team** or the roles mentioned in the match can vote!', ephemeral: true });
+    const cap1 = match.team1[0] ? `<@${match.team1[0]}>` : '—';
+    const cap2 = match.team2[0] ? `<@${match.team2[0]}>` : '—';
+    return interaction.reply({ content: `❌ Only the **first 2 players** in the match can vote! (${cap1} & ${cap2})`, ephemeral: true });
   }
   if (match.winnerVoteSet && match.loserVoteSet) {
     return interaction.reply({ content: '✅ MVP votes were already finalized.', ephemeral: true });
@@ -928,7 +930,8 @@ async function handleMvpVote(interaction, match) {
     .setTitle('🗳️ MVP Voting')
     .setColor(COLORS.gold)
     .setDescription('Select **Winner MVP** or **Loser MVP**, then pick the player.\nOnly the **first 2 players of each team** are listed.');
-  return interaction.reply({ embeds: [embed], components: [typeRow], ephemeral: true });
+  await interaction.reply({ embeds: [embed], components: [typeRow], ephemeral: true });
+  await syncVotePanel(interaction.guild, match);
 }
 
 async function handleVoteCancel(interaction, match) {
@@ -944,6 +947,7 @@ async function handleVoteCancel(interaction, match) {
   }
   manager.persistMatches();
   await updateResultBox(interaction.guild, match);
+  await syncVotePanel(interaction.guild, match);
   return interaction.reply({
     content: changed.length
       ? `✅ Your ${changed.join(' & ')} vote was cleared. Vote again with 🗳️ Vote MVP.`
@@ -1003,6 +1007,7 @@ async function handleResetVotes(interaction, match) {
   match.resultStatus = '🔄 Votes have been reset. Use the menu again to re-vote.';
   manager.persistMatches();
   await updateResultBox(interaction.guild, match);
+  await syncVotePanel(interaction.guild, match);
   await interaction.reply({ content: '🔄 All votes have been reset!', ephemeral: true });
   const room = interaction.guild.channels.cache.get(match.channelId2);
   if (room) room.send({ content: `🔄 **Votes have been reset** by <@${interaction.user.id}>. Captains <@${match.team1[0]}> & <@${match.team2[0]}> can vote again.` }).catch(() => {});
@@ -1020,6 +1025,64 @@ function mvpPlayerOptions(guild, match, excludeId) {
       .setLabel(`Team ${team} • ${name}`.slice(0, 100))
       .setValue(id);
   });
+}
+
+function buildVotePanelEmbed(match) {
+  const cap1 = match.team1[0] ? `<@${match.team1[0]}>` : '—';
+  const cap2 = match.team2[0] ? `<@${match.team2[0]}>` : '—';
+  const tally = (key, label) => {
+    const votes = match[key] || {};
+    const n = Object.keys(votes).length;
+    if (match[`${key.slice(0, -5)}VoteSet`]) {
+      const mvpKey = key === 'winnerVotes' ? 'mvpWinnerId' : 'mvpLoserId';
+      return match[mvpKey] ? `${label} **<@${match[mvpKey]}>**` : `${label} *decided*`;
+    }
+    if (n === 0) return `${label} 🔻 *0/2 votes*`;
+    const list = Object.entries(votes).map(([, v]) => `<@${v.player}>`).join(', ');
+    return `${label} ⏳ ${n}/2 → ${list}`;
+  };
+  const winnerLine = tally('winnerVotes', '🏆');
+  const loserLine = tally('loserVotes', '💪');
+  return new EmbedBuilder()
+    .setTitle('🗳️ MVP Voting')
+    .setColor(COLORS.gold)
+    .setDescription(
+      `Only the **first 2 players** of this match can vote:\n` +
+      `${cap1} (🇹1) & ${cap2} (🇹2)`
+    )
+    .addFields(
+      { name: '🏆 Winner MVP', value: winnerLine, inline: false },
+      { name: '💪 Loser MVP', value: loserLine, inline: false }
+    )
+    .setFooter({ text: BRANDING });
+}
+
+async function syncVotePanel(guild, match) {
+  const room = guild.channels.cache.get(match.channelId2);
+  if (!room) return;
+  const embed = buildVotePanelEmbed(match);
+  if (match.votePanelMessageId) {
+    const msg = await room.messages.fetch(match.votePanelMessageId).catch(() => null);
+    if (msg) {
+      await msg.edit({ embeds: [embed] }).catch(() => {});
+      return;
+    }
+  }
+  const sent = await room.send({ embeds: [embed] }).catch(() => null);
+  if (sent) {
+    match.votePanelMessageId = sent.id;
+    manager.persistMatches();
+  }
+}
+
+async function clearVotePanel(guild, match) {
+  const room = guild.channels.cache.get(match.channelId2);
+  if (room && match.votePanelMessageId) {
+    const msg = await room.messages.fetch(match.votePanelMessageId).catch(() => null);
+    if (msg) await msg.delete().catch(() => {});
+  }
+  match.votePanelMessageId = null;
+  manager.persistMatches();
 }
 
 function buildMainMatchEmbed(match, guild) {
@@ -2640,6 +2703,7 @@ async function settleMatchResult(guild, match) {
   }
 
   await dumpMatchChat(guild, match);
+  await clearVotePanel(guild, match);
 
   await manager.finishMatch(guild, match);
   applyRankNicknames(guild).catch(() => {});
@@ -2880,7 +2944,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const voterId = interaction.user.id;
     const captains = [match.team1[0], match.team2[0]].filter(Boolean);
     if (!isMvpVoter(match, interaction.member)) {
-      return interaction.reply({ content: '❌ Only the **first player of each team** or the roles mentioned in the match can vote!', ephemeral: true });
+      return interaction.reply({ content: '❌ Only the **first 2 players** in the match can vote! (Team captains only)', ephemeral: true });
     }
     const isCaptainVote = captains.includes(voterId);
     const otherId = isCaptainVote ? (voterId === match.team1[0] ? match.team2[0] : match.team1[0]) : null;
@@ -2936,6 +3000,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const teamOf = id => match.team1.includes(id) ? 1 : 2;
     match[votesKey][voterId] = { team: teamOf(selected), player: selected };
     manager.persistMatches();
+    await syncVotePanel(interaction.guild, match);
 
     const other = otherId ? match[votesKey][otherId] : null;
     let msg;
