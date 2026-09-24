@@ -1,0 +1,30 @@
+name: Deploy ff-bot to Railway
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: railway-deploy-ff-bot
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.repository == 'Issmail-2/ff-bot'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Link project
+        run: railway link --project "sincere-cooperation" --environment production
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Deploy ff-bot
+        run: railway up --ci --service ff-bot
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
