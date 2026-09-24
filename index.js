@@ -661,31 +661,12 @@ function teamPanel(ids, matchMode, size, guild) {
   }).join('\n');
 }
 
-const MATCH_TYPE_LABELS = { highlight: 'Highlight', apostado: 'Apostado', zelika: 'Zelika', amo: 'AMO' };
-
-function buildMatchTypeRow(match) {
-  return new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`matchtype_${match.id}`)
-      .setPlaceholder(match.options ? `Type: ${match.options}` : 'Select match type (optional)')
-      .setMinValues(0)
-      .setMaxValues(4)
-      .addOptions(
-        new StringSelectMenuOptionBuilder().setEmoji('🔥').setLabel('Highlight').setDescription('Highlight match').setValue('highlight'),
-        new StringSelectMenuOptionBuilder().setEmoji('💰').setLabel('Apostado').setDescription('Apostado match').setValue('apostado'),
-        new StringSelectMenuOptionBuilder().setEmoji('✨').setLabel('Zelika').setDescription('Zelika match').setValue('zelika'),
-        new StringSelectMenuOptionBuilder().setEmoji('🎮').setLabel('AMO').setDescription('AMO match').setValue('amo')
-      )
-  );
-}
-
 function buildSetupMessageParts(match, hostId) {
   const embed = new EmbedBuilder()
     .setTitle(`👾 __Free Fire ${match.teamSize}v${match.teamSize} Match__`)
     .setDescription(
       `Match started by <@${hostId}>\n\n` +
-      `Press **Set Room Config** below to enter your room details, then players use the buttons to lock their slots.` +
-      (match.options ? `\n\n🎮 **Match type:** ${match.options}` : '\n\n🎮 **Match type:** *tap the dropdown above to choose (optional)*')
+      `Press **Set Room Config** below to enter your room details, then players use the buttons to lock their slots.`
     )
     .setColor('#2F3136')
     .setFooter({ text: BRANDING });
@@ -701,7 +682,7 @@ function buildSetupMessageParts(match, hostId) {
       .setLabel('Cancel Match')
       .setStyle(ButtonStyle.Danger)
   );
-  return { embeds: [embed], components: [buttons, buildMatchTypeRow(match)] };
+  return { embeds: [embed], components: [buttons] };
 }
 
 function buildMatchBoxEmbed(guild, match, creatorUser) {
@@ -719,10 +700,6 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
       { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field || '*Empty*', inline: true }
     )
     .setFooter({ text: BRANDING });
-
-  if (match.options) {
-    embed.addFields({ name: '🎮 Match type', value: match.options, inline: false });
-  }
 
   return embed;
 }
@@ -1053,7 +1030,6 @@ function buildMainMatchEmbed(match, guild) {
     { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field, inline: true },
     { name: '⚡ STATUS', value: status || '—' }
   ];
-  if (match.options) fields.push({ name: '⚙️ OPTIONS', value: String(match.options) });
 
   return new EmbedBuilder()
     .setTitle(`${config.emojis.game} CUSTOM ROOM`)
@@ -2785,14 +2761,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.editReply({ content: `❌ **Only numbers!** ${invalidFields.join(', ')} must contain numbers only.` });
     }
 
-    const typeLabels = MATCH_TYPE_LABELS;
-    const optionsText = match.options || '';
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
-    match.options = optionsText || undefined;
     match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} options=${optionsText || '—'} creator auto-joined T1`);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
 
     try {
       const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
@@ -2809,9 +2782,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       console.log('[MODAL] match box sent successfully, new msg id:', newMsg.id);
 
       await interaction.editReply({
-        content: match.options
-          ? `✅ Room config saved. Match type: **${match.options}**.`
-          : '✅ Room config saved.'
+        content: '✅ Room config saved.'
       }).catch(() => {});
       if (match.configTimeout) {
         clearTimeout(match.configTimeout);
@@ -2846,25 +2817,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isStringSelectMenu()) {
-    if (interaction.customId.startsWith('matchtype_')) {
-      const matchId = interaction.customId.slice('matchtype_'.length);
-      const match = manager.getMatch(matchId);
-      if (!match) {
-        return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
-      }
-      if (match.creatorId !== interaction.user.id) {
-        return interaction.reply({ content: '❌ Only the match host can set the type.', ephemeral: true });
-      }
-      match.options = interaction.values.map(v => MATCH_TYPE_LABELS[v] || v).join(', ');
-      manager.persistMatches();
-      const parts = buildSetupMessageParts(match, match.creatorId);
-      try {
-        await interaction.update({ embeds: parts.embeds, components: parts.components });
-      } catch (e) {
-        errLog('matchtype update failed for match ' + match.id, e);
-      }
-      return;
-    }
     if (interaction.customId === 'store_menu') {
       return handleBuy(interaction, interaction.values[0]);
     }
