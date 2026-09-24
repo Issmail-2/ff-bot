@@ -623,12 +623,21 @@ async function createChannel(guild, match) {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels],
     });
   }
-  const channel = await guild.channels.create({
-    name: `🎮 room-${match.id.slice(-4)}`,
-    type: ChannelType.GuildText,
-    parent: category ? category.id : null,
-    permissionOverwrites: overwrites,
-  });
+  let channel = null;
+  if (match.channelId2) {
+    try {
+      channel = await guild.channels.fetch(match.channelId2);
+    } catch (e) { channel = null; }
+    if (channel && channel.type !== ChannelType.GuildText) channel = null;
+  }
+  if (!channel) {
+    channel = await guild.channels.create({
+      name: `🎮 room-${match.id.slice(-4)}`,
+      type: ChannelType.GuildText,
+      parent: category ? category.id : null,
+      permissionOverwrites: overwrites,
+    });
+  }
   match.channelId2 = channel.id;
   return channel;
 }

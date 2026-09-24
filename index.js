@@ -748,12 +748,26 @@ async function updateMatchChannel(guild, match) {
       { name: `${config.emojis.team2} TEAM 2 — \`${(match.team2 || []).length}/${match.teamSize}\``, value: list2 || '*Empty*', inline: true }
     )
     .setFooter({ text: BRANDING });
+  let infoMsg = null;
+  if (match.roomInfoMessageId) {
+    infoMsg = await channel.messages.fetch(match.roomInfoMessageId).catch(() => null);
+  }
+  if (infoMsg) {
+    await infoMsg.edit({ embeds: [embed] }).catch(() => {});
+    return;
+  }
   await channel.messages.fetch({ limit: 20 }).catch(() => {});
   const lastMsg = channel.lastMessage;
   if (lastMsg && lastMsg.author.id === client.user.id && lastMsg.embeds.length) {
     await lastMsg.edit({ embeds: [embed] }).catch(() => {});
+    match.roomInfoMessageId = lastMsg.id;
+    manager.persistMatches();
   } else {
-    await channel.send({ embeds: [embed] }).catch(() => {});
+    const sent = await channel.send({ embeds: [embed] }).catch(() => null);
+    if (sent) {
+      match.roomInfoMessageId = sent.id;
+      manager.persistMatches();
+    }
   }
 }
 
@@ -796,33 +810,39 @@ async function cancelMatch(guild, match, cancelText) {
   console.log(`[VOICE] match ${match.id} cancelled — players restored, team channels cleaned up`);
 }
 
-const CANCEL_NEEDED = 2;
+function cancelVotesNeeded(match) {
+  const real = [...new Set([...(match.team1 || []), ...(match.team2 || [])])].filter(id => /^\d{15,20}$/.test(id));
+  return Math.max(1, real.length);
+}
+
+function isMatchPlayer(match, userId) {
+  return match.creatorId === userId || (match.team1 || []).includes(userId) || (match.team2 || []).includes(userId);
+}
 
 function buildCancelVoteEmbed(match) {
   const cancelVotes = match.cancelVotes || { 1: [], 2: [] };
   const votes1 = cancelVotes[1] || [];
   const votes2 = cancelVotes[2] || [];
-  const list = (team) => {
-    const votes = cancelVotes[team] || [];
-    if (votes.length === 0) return '*No votes yet*';
-    return votes.map(id => `<@${id}>`).join(' ');
-  };
-  const t1Done = votes1.length >= CANCEL_NEEDED;
-  const t2Done = votes2.length >= CANCEL_NEEDED;
-  const status = (t1Done && t2Done) ? '✅ **CANCEL APPROVED** — the match will be cancelled now!' : '⏳ **Waiting for votes...**';
+  const votes = votes1.length + votes2.length;
+  const needed = cancelVotesNeeded(match);
+  const all = [...votes1, ...votes2];
+  const done = votes >= needed;
+  const status = done ? '✅ **CANCEL APPROVED** — the match will be cancelled now!' : `⏳ **Waiting for votes...** (${votes}/${needed})`;
   return new EmbedBuilder()
     .setTitle('⛔ CANCEL VOTE')
     .setColor(COLORS.danger)
-    .setDescription(`**${CANCEL_NEEDED} votes needed from every team** to cancel. Each player can vote once — the match keeps running until the vote passes.`)
+    .setDescription(`**${needed} vote${needed === 1 ? '' : 's'} needed from the players in this match** to cancel (${votes}/${needed}). Each player can vote once — the match keeps running until the vote passes.`)
     .addFields(
-      { name: `${config.emojis.team1} TEAM 1 — \`${votes1.length}/${CANCEL_NEEDED}\``, value: `\`\`\`${progressBar(votes1.length, CANCEL_NEEDED, 8)}\`\`\`\n${list(1)}`, inline: true },
-      { name: `${config.emojis.team2} TEAM 2 — \`${votes2.length}/${CANCEL_NEEDED}\``, value: `\`\`\`${progressBar(votes2.length, CANCEL_NEEDED, 8)}\`\`\`\n${list(2)}`, inline: true },
+      { name: '🗳️ VOTES', value: `\`\`\`${progressBar(votes, needed, 8)}\`\`\`\n${all.length ? all.map(id => `<@${id}>`).join(' ') : '*No votes yet*'}` },
       { name: '⚡ STATUS', value: status }
     )
     .setFooter({ text: BRANDING });
 }
 
 async function openCancelVote(guild, match, interaction) {
+  if (!isMatchPlayer(match, interaction.user.id) && !(interaction.member && interaction.member.permissions.has('Administrator'))) {
+    return interaction.reply({ content: '❌ Only players in this match can start a cancel vote!', ephemeral: true });
+  }
   const roomChannel = guild.channels.cache.get(match.channelId2) || guild.channels.cache.get(match.channelId);
   if (!roomChannel) {
     return interaction.reply({ content: '❌ Could not find the match channel.', ephemeral: true });
@@ -845,7 +865,8 @@ async function openCancelVote(guild, match, interaction) {
       manager.persistMatches();
     }
   }
-  return interaction.reply({ content: '❌ **Move to cancel started.** Need 2 votes from each team. Press **🗳️ Vote for Cancel** in the match room.', ephemeral: true });
+  const needed = cancelVotesNeeded(match);
+  return interaction.reply({ content: `❌ **Cancel vote started.** Need **${needed}** vote${needed === 1 ? '' : 's'} from the match players. Press **🗳️ Vote for Cancel**.`, ephemeral: true });
 }
 
 function buildMatchMenu(match) {
@@ -858,7 +879,7 @@ function buildMatchMenu(match) {
       .addOptions(
         new StringSelectMenuOptionBuilder().setEmoji('🛡️').setLabel('Request Staff').setDescription('Notify staff about this match').setValue('staffreq'),
         new StringSelectMenuOptionBuilder().setEmoji('🗳️').setLabel('Vote for MVP').setDescription('Winner/Loser MVP voting (captains/staff)').setValue('mvp'),
-        new StringSelectMenuOptionBuilder().setEmoji('❌').setLabel('Cancel Match').setDescription('Host cancel / start cancel vote').setValue('cancel'),
+        new StringSelectMenuOptionBuilder().setEmoji('❌').setLabel('Cancel Match').setDescription('Start a cancel vote (all players agree)').setValue('cancel'),
         new StringSelectMenuOptionBuilder().setEmoji('🚫').setLabel('Staff Cancel').setDescription('Immediate cancel (staff only)').setValue('staffcancel'),
         new StringSelectMenuOptionBuilder().setEmoji('↩️').setLabel('Cancel My Vote').setDescription('Clear your MVP vote').setValue('votecancel'),
         new StringSelectMenuOptionBuilder().setEmoji('🔄').setLabel('Reset Votes').setDescription('Reset all votes (roles mentioned in match)').setValue('resetvotes')
@@ -959,24 +980,10 @@ async function handleVoteCancel(interaction, match) {
 }
 
 async function handleCancelMatchAction(interaction, match) {
-  const hasRoleAccess = interaction.member && (
-    interaction.member.permissions.has('Administrator') ||
-    (config.matchPingRoles || []).some(rid => rid && interaction.member.roles.cache.has(rid))
-  );
-  if (match.status === 'full') {
-    if (hasRoleAccess) {
-      return handleStaffCancel(interaction, match);
-    }
-    if (interaction.channel && interaction.channel.id === match.channelId2) {
-      return openCancelVote(interaction.guild, match, interaction);
-    }
-    return interaction.reply({ content: '⚠️ Use the **❌ Cancel Match** option inside the match room to start a cancel vote.', ephemeral: true });
+  if (match.status === 'waiting' || match.status === 'full') {
+    return openCancelVote(interaction.guild, match, interaction);
   }
-  if (match.creatorId !== interaction.user.id && !hasRoleAccess) {
-    return interaction.reply({ content: '❌ Only the match host can cancel the match!', ephemeral: true });
-  }
-  await cancelMatch(interaction.guild, match, `❌ **Match cancelled by** <@${interaction.user.id}>`);
-  await interaction.reply({ content: '❌ Match cancelled!', ephemeral: true });
+  return interaction.reply({ content: '⚠️ This match is not open for a cancel vote right now.', ephemeral: true });
 }
 
 async function handleStaffCancel(interaction, match) {
@@ -1131,6 +1138,7 @@ async function updateResultBox(guild, match) {
 }
 
 async function startFullMatch(guild, match) {
+  if (match.status === 'full') return null;
   match.status = 'full';
   manager.persistMatches();
 
@@ -3261,13 +3269,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === 'cancelfvote') {
-      if (match.status !== 'full') {
+      if (match.status !== 'waiting' && match.status !== 'full') {
         return interaction.reply({ content: '❌ This match is not cancellable by vote right now.', ephemeral: true });
       }
-      const team = manager.getPlayerTeam(match, interaction.user.id);
-      if (!team) {
+      if (!isMatchPlayer(match, interaction.user.id)) {
         return interaction.reply({ content: '❌ Only players in this match can vote to cancel!', ephemeral: true });
       }
+      const team = manager.getPlayerTeam(match, interaction.user.id) || 1;
       match.cancelVotes = match.cancelVotes || { 1: [], 2: [] };
       if ((match.cancelVotes[team] || []).includes(interaction.user.id)) {
         return interaction.reply({ content: '✅ You already voted to cancel!', ephemeral: true });
@@ -3275,8 +3283,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       match.cancelVotes[team].push(interaction.user.id);
       manager.persistMatches();
 
+      const needed = cancelVotesNeeded(match);
+      const votes = (match.cancelVotes[1] || []).length + (match.cancelVotes[2] || []).length;
       const roomChannel = interaction.guild.channels.cache.get(match.channelId2) || interaction.channel;
-      const ok = (match.cancelVotes[1] || []).length >= CANCEL_NEEDED && (match.cancelVotes[2] || []).length >= CANCEL_NEEDED;
 
       if (match.cancelMsgId && roomChannel) {
         const cmsg = await roomChannel.messages.fetch(match.cancelMsgId).catch(() => null);
@@ -3288,11 +3297,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }).catch(() => {});
       }
 
-      if (ok) {
+      if (votes >= needed) {
         await cancelMatch(interaction.guild, match, `❌ **Match cancelled by player vote** (<@${interaction.user.id}>)`);
         return interaction.reply({ content: '❌ **The cancel vote passed — match cancelled!**', ephemeral: true });
       }
-      return interaction.reply({ content: `✅ Vote recorded! Team ${team} now has ${(match.cancelVotes[team] || []).length}/${CANCEL_NEEDED}. Need ${CANCEL_NEEDED} from **each** team to cancel.`, ephemeral: true });
+      return interaction.reply({ content: `✅ Vote recorded! (**${votes}/${needed}**). Need **${needed}** vote${needed === 1 ? '' : 's'} from the match players to cancel.`, ephemeral: true });
     }
 
     if (action === 'staffcancel') {
