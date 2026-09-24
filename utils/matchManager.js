@@ -987,5 +987,6 @@ module.exports = {
   clearAllMatches,
   endMatch,
   ensureVoicePool,
-  getVoicePoolSize
+  getVoicePoolSize,
+  isRealId
 };
