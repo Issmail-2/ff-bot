@@ -1189,38 +1189,6 @@ async function startFullMatch(guild, match) {
   return { team1Channel, team2Channel, roomChannel };
 }
 
-async function tryStartMatch(guild, match) {
-  try {
-    if (match.status !== 'waiting') return null;
-    if (manager.isTeamsFull(match.id)) {
-      return startFullMatch(guild, match);
-    }
-    const real1 = (match.team1 || []).filter(id => /^\d{15,20}$/.test(id));
-    const real2 = (match.team2 || []).filter(id => /^\d{15,20}$/.test(id));
-    const t1Full = real1.length === match.teamSize;
-    const t2Full = real2.length === match.teamSize;
-    if (t1Full && real2.length === 0) {
-      for (let i = 0; match.team2.length < match.teamSize; i++) match.team2.push(`mockT2_${i}`);
-      manager.persistMatches();
-      return startFullMatch(guild, match);
-    }
-    if (t2Full && real1.length === 0) {
-      for (let i = 0; match.team1.length < match.teamSize; i++) match.team1.push(`mockT1_${i}`);
-      manager.persistMatches();
-      return startFullMatch(guild, match);
-    }
-    await syncJoinButtons(guild, match);
-    return null;
-  } catch (e) {
-    console.error('Error starting match:', e);
-    try {
-      const ch = guild.channels.cache.get(match.channelId);
-      if (ch) await ch.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(() => {});
-    } catch {}
-    return null;
-  }
-}
-
 function buildMatchButtons(match, userId) {
   const joinTeam1 = new ButtonBuilder()
     .setCustomId(`join1_${match.id}`)
@@ -2783,9 +2751,20 @@ async function performJoin(interaction, match, team) {
   if (msg) {
     await msg.edit({ embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)] });
   }
+  if (!manager.isTeamsFull(match.id)) {
+    await syncJoinButtons(interaction.guild, match);
+  }
   await interaction.reply({ content: `✅ Joined Team ${team}!`, ephemeral: true });
   await updateMatchChannel(interaction.guild, match);
-  await tryStartMatch(interaction.guild, match);
+
+  if (manager.isTeamsFull(match.id)) {
+    try {
+      await startFullMatch(interaction.guild, match);
+    } catch (e) {
+      console.error('Error starting match:', e);
+      await interaction.channel.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(() => {});
+    }
+  }
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
