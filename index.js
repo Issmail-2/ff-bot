@@ -939,20 +939,17 @@ async function handleMvpVote(interaction, match) {
     return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
   }
   const typeRow = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`mvptype_${match.id}`)
-      .setPlaceholder('Select the vote type')
-      .setMinValues(1)
-      .setMaxValues(1)
-      .addOptions(
-        new StringSelectMenuOptionBuilder().setLabel('🏆 Winner MVP').setValue('winner'),
-        new StringSelectMenuOptionBuilder().setLabel('💪 Loser MVP').setValue('loser')
-      )
+    new ButtonBuilder().setCustomId(`mvpwinner_${match.id}`).setEmoji('🏆').setLabel('Winner MVP').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`mvploser_${match.id}`).setEmoji('💪').setLabel('Loser MVP').setStyle(ButtonStyle.Secondary)
   );
   const embed = new EmbedBuilder()
     .setTitle('🗳️ MVP Voting')
     .setColor(COLORS.gold)
-    .setDescription('Select **Winner MVP** or **Loser MVP**, then pick the player.\nOnly the **first 2 players of each team** are listed.');
+    .setDescription(
+      `Choose **🏆 Winner MVP** or **💪 Loser MVP**.\n` +
+      `Only the **first 2 players** of the match can vote (${match.team1[0] ? `<@${match.team1[0]}>` : '—'} 🇹1 & ${match.team2[0] ? `<@${match.team2[0]}>` : '—'} 🇹2).\n` +
+      `After the winner is chosen, **Loser MVP** lists only the **losing team** members.`
+    );
   await interaction.reply({ embeds: [embed], components: [typeRow], ephemeral: true });
   await syncVotePanel(interaction.guild, match);
 }
@@ -1022,10 +1019,11 @@ async function handleResetVotes(interaction, match) {
   if (room) room.send({ content: `🔄 **Votes have been reset** by <@${interaction.user.id}>. Captains <@${match.team1[0]}> & <@${match.team2[0]}> can vote again.` }).catch(() => {});
 }
 
-function mvpPlayerOptions(guild, match, excludeId) {
+function mvpPlayerOptions(guild, match, excludeId, teamFilter) {
   const pool = [...new Set([...(match.team1 || []), ...(match.team2 || [])])]
-    .filter(id => id && !excludeId !== undefined ? id !== excludeId : true);
-  const picks = pool.filter(id => id && /^\d{15,20}$/.test(id) && (!excludeId || id !== excludeId));
+    .filter(id => id && /^\d{15,20}$/.test(id) && (!excludeId || id !== excludeId))
+    .filter(id => !teamFilter || (match.team1.includes(id) ? 1 : 2) === teamFilter);
+  const picks = pool;
   return picks.map(id => {
     const member = guild.members.cache.get(id);
     const name = member ? (member.displayName || member.user.username) : id;
@@ -1034,6 +1032,49 @@ function mvpPlayerOptions(guild, match, excludeId) {
       .setLabel(`Team ${team} • ${name}`.slice(0, 100))
       .setValue(id);
   });
+}
+
+async function showMvpCandidatePicker(interaction, match, isWinner) {
+  const voterId = interaction.user.id;
+  const setKey = isWinner ? 'winnerVoteSet' : 'loserVoteSet';
+  const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
+  if (match.status !== 'full') {
+    return interaction.reply({ content: '❌ This match is not in a votable state.', ephemeral: true });
+  }
+  if (!isMvpVoter(match, interaction.member)) {
+    return interaction.reply({ content: '❌ Only the **first 2 players** in the match can vote! (Team captains only)', ephemeral: true });
+  }
+  if (match[setKey]) {
+    return interaction.reply({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already finalized.`, ephemeral: true });
+  }
+  if (match[votesKey][voterId]) {
+    return interaction.reply({ content: '✅ You already voted! Use ❌ Cancel My Vote to change it.', ephemeral: true });
+  }
+  const teamFilter = isWinner
+    ? (match.loserTeam ? (match.loserTeam === 1 ? 2 : 1) : null)
+    : (match.winnerTeam ? (match.winnerTeam === 1 ? 2 : 1) : null);
+  const opts = mvpPlayerOptions(interaction.guild, match, isWinner ? match.mvpLoserId : match.mvpWinnerId, teamFilter);
+  if (opts.length === 0) {
+    return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
+  }
+  const embed = new EmbedBuilder()
+    .setTitle(isWinner ? '🏆 SELECT WINNER MVP' : '💪 SELECT LOSER MVP')
+    .setColor(isWinner ? COLORS.gold : COLORS.loser)
+    .setDescription(
+      (teamFilter
+        ? `Only players from **Team ${teamFilter}** (the ${isWinner ? 'winning' : 'losing'} team) are listed below.`
+        : `Pick a player from the match roster below.`) +
+      `\nOnly the **first 2 players of each team** can vote.`
+    );
+  const row = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`${isWinner ? 'mvvp' : 'mvlp'}_${match.id}`)
+      .setPlaceholder('Select Players')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(opts)
+  );
+  return interaction.update({ embeds: [embed], components: [row] });
 }
 
 function buildVotePanelEmbed(match) {
@@ -2961,32 +3002,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const otherId = isCaptainVote ? (voterId === match.team1[0] ? match.team2[0] : match.team1[0]) : null;
 
     if (kind === 'type') {
-      const isWinner = interaction.values[0] === 'winner';
-      const setKey = isWinner ? 'winnerVoteSet' : 'loserVoteSet';
-      const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
-      if (match[setKey]) {
-        return interaction.reply({ content: `✅ ${isWinner ? 'Winner' : 'Loser'} MVP was already finalized.`, ephemeral: true });
-      }
-      if (match[votesKey][voterId]) {
-        return interaction.reply({ content: '✅ You already voted! Use ❌ Cancel My Vote to change it.', ephemeral: true });
-      }
-      const opts = mvpPlayerOptions(interaction.guild, match, isWinner ? match.mvpLoserId : match.mvpWinnerId);
-      if (opts.length === 0) {
-        return interaction.reply({ content: '⚠️ No players found in this match.', ephemeral: true });
-      }
-      const embed = new EmbedBuilder()
-        .setTitle(isWinner ? '🏆 SELECT WINNER MVP' : '💪 SELECT LOSER MVP')
-        .setColor(isWinner ? COLORS.gold : COLORS.loser)
-        .setDescription(`Pick a player from the match roster below (first **2 players of each team** in registration order).`);
-      const row = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`${isWinner ? 'mvvp' : 'mvlp'}_${match.id}`)
-          .setPlaceholder('Select Players')
-          .setMinValues(1)
-          .setMaxValues(1)
-          .addOptions(opts)
-      );
-      return interaction.update({ embeds: [embed], components: [row] });
+      return showMvpCandidatePicker(interaction, match, interaction.values[0] === 'winner');
     }
 
     const isWinner = kind === 'winner';
@@ -3203,7 +3219,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (action === 'mvpvote' || action === 'mvpwinner' || action === 'mvploser') {
+    if (action === 'mvpwinner') {
+      return showMvpCandidatePicker(interaction, match, true);
+    }
+
+    if (action === 'mvploser') {
+      return showMvpCandidatePicker(interaction, match, false);
+    }
+
+    if (action === 'mvpvote') {
       return handleMvpVote(interaction, match);
     }
 
