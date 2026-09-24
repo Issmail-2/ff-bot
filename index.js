@@ -3919,6 +3919,22 @@ if (content === '&applyfix' || content === '!applyfix') {
     if (!existing) return message.reply('❌ No active match found for that user.');
     await cancelMatch(message.guild, existing, `❌ **Match cancelled by admin** (<@${message.author.id}>)`);
     await message.reply(`❌ **Match cancelled by admin!** <@${targetId}>'s match has been cancelled.`);
+  } else if (content.startsWith('!close')) {
+    if (!hasCommandAccess(message.member)) {
+      return message.reply('❌ Only supervisors/admins can close a game!');
+    }
+    const target = message.mentions.users.first();
+    const rest = message.content.replace(/^!close/i, '').replace(/^game\s+/i, '').trim();
+    const restId = (rest.match(/\d{15,20}/) || [])[0];
+    const targetId = (target && target.id) || restId;
+    if (!targetId) return message.reply('Usage: `!close game <userId>` (or mention the user)');
+    const existing = manager.getAllMatches().find(mt =>
+      mt.mode === mode &&
+      (mt.creatorId === targetId || (mt.team1 || []).includes(targetId) || (mt.team2 || []).includes(targetId))
+    );
+    if (!existing) return message.reply('❌ No active match found for that user.');
+    await cancelMatch(message.guild, existing, `🚫 **Game closed by admin** (<@${message.author.id}>)`);
+    await message.reply(`🚫 **Game closed!** <@${targetId}>'s game has been closed.`);
   } else if (content.startsWith('!blacklist')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can blacklist users!');
