@@ -885,7 +885,11 @@ function buildMatchMenu(match) {
         new StringSelectMenuOptionBuilder().setEmoji('🔄').setLabel('Reset Votes').setDescription('Reset all votes (roles mentioned in match)').setValue('resetvotes')
       )
   );
-  return [row];
+  const voteRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`mvpwinner_${match.id}`).setEmoji('🏆').setLabel('Vote for MVP W').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`mvploser_${match.id}`).setEmoji('💪').setLabel('Vote for MVP L').setStyle(ButtonStyle.Secondary)
+  );
+  return [row, voteRow];
 }
 
 async function handleStaffReq(interaction, match) {
@@ -1034,7 +1038,7 @@ function mvpPlayerOptions(guild, match, excludeId, teamFilter) {
   });
 }
 
-async function showMvpCandidatePicker(interaction, match, isWinner) {
+async function showMvpCandidatePicker(interaction, match, isWinner, mode = 'update') {
   const voterId = interaction.user.id;
   const setKey = isWinner ? 'winnerVoteSet' : 'loserVoteSet';
   const votesKey = isWinner ? 'winnerVotes' : 'loserVotes';
@@ -1074,7 +1078,9 @@ async function showMvpCandidatePicker(interaction, match, isWinner) {
       .setMaxValues(1)
       .addOptions(opts)
   );
-  return interaction.update({ embeds: [embed], components: [row] });
+  const payload = { embeds: [embed], components: [row] };
+  if (mode === 'reply') return interaction.reply(payload);
+  return interaction.update(payload);
 }
 
 function buildVotePanelEmbed(match) {
@@ -3220,11 +3226,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === 'mvpwinner') {
-      return showMvpCandidatePicker(interaction, match, true);
+      return showMvpCandidatePicker(interaction, match, true, 'reply');
     }
 
     if (action === 'mvploser') {
-      return showMvpCandidatePicker(interaction, match, false);
+      return showMvpCandidatePicker(interaction, match, false, 'reply');
     }
 
     if (action === 'mvpvote') {
