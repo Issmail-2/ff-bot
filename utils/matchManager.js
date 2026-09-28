@@ -31,8 +31,13 @@ function staffVoiceOverwrites() {
 const activeMatches = new Map();
 const MATCHES_FILE = path.resolve(__dirname, '..', 'data', 'matches.json');
 const LOGS_FILE = path.resolve(__dirname, '..', 'data', 'matches_log.json');
-const suppressedUsers = new Set();
+const suppressedUsers = new Map();
 const restoringPlayers = new Map();
+// Both maps are one-shot flags consumed by the next VoiceStateUpdate for that
+// player. They need a TTL because the matching event may never arrive (the
+// player disconnects mid-teardown), and without one the entry leaks forever.
+const SUPPRESS_TTL_MS = 120000;
+const RESTORE_TTL_MS = 120000;
 const VOICE_POOL_SIZE = parseInt(process.env.VOICE_POOL_SIZE || '0') || (config.voicePoolSize || 5);
 const voicePool = new Map();
 const poolInUse = new Map();
@@ -55,23 +60,50 @@ function isRealId(id) {
 }
 
 function isRestoring(userId) {
-  return userId !== undefined && userId !== null && restoringPlayers.has(String(userId));
+  if (userId === undefined || userId === null) return false;
+  const key = String(userId);
+  const entry = restoringPlayers.get(key);
+  if (entry === undefined) return false;
+  if (entry.expiresAt <= Date.now()) {
+    restoringPlayers.delete(key);
+    return false;
+  }
+  return true;
 }
 
 function beginRestore(match) {
+  const expiresAt = Date.now() + RESTORE_TTL_MS;
   for (const userId of Object.keys(match.originalChannels || {})) {
-    restoringPlayers.set(String(userId), match.id);
+    restoringPlayers.set(String(userId), { matchId: match.id, expiresAt });
   }
 }
 
 function endRestore(match) {
   for (const userId of Object.keys(match.originalChannels || {})) {
-    if (restoringPlayers.get(String(userId)) === match.id) restoringPlayers.delete(String(userId));
+    const key = String(userId);
+    const entry = restoringPlayers.get(key);
+    if (entry && entry.matchId === match.id) restoringPlayers.delete(key);
   }
 }
 
 function endRestoreUser(match, userId) {
-  if (restoringPlayers.get(String(userId)) === match.id) restoringPlayers.delete(String(userId));
+  const key = String(userId);
+  const entry = restoringPlayers.get(key);
+  if (entry && entry.matchId === match.id) restoringPlayers.delete(key);
+}
+
+// Both of the maps above are only cleared by the teardown that created them.
+// If that teardown is interrupted (crash, restart mid-cleanup) the entries used
+// to stay forever, permanently marking players as "restoring" or "suppressed"
+// and making the bot ignore their future voice-state changes.
+function sweepEphemeralFlags() {
+  const now = Date.now();
+  for (const [key, entry] of restoringPlayers) {
+    if (!entry || entry.expiresAt <= now) restoringPlayers.delete(key);
+  }
+  for (const [key, expiresAt] of suppressedUsers) {
+    if (expiresAt <= now) suppressedUsers.delete(key);
+  }
 }
 
 function clearOriginalChannel(match, userId) {
@@ -111,17 +143,17 @@ function getMatchLogs() {
 }
 
 function suppressUsers(userIds) {
+  const expiresAt = Date.now() + SUPPRESS_TTL_MS;
   for (const id of userIds) {
-    if (id) suppressedUsers.add(id);
+    if (id) suppressedUsers.set(id, expiresAt);
   }
 }
 
 function isSuppressed(userId) {
-  if (suppressedUsers.has(userId)) {
-    suppressedUsers.delete(userId);
-    return true;
-  }
-  return false;
+  const expiresAt = suppressedUsers.get(userId);
+  if (expiresAt === undefined) return false;
+  suppressedUsers.delete(userId);
+  return expiresAt > Date.now();
 }
 
 function ensureMatchesFile() {
@@ -292,6 +324,7 @@ function createMatch(creatorId, teamSize, channelId, mode = 'amo') {
 function cleanupExpired() {
   const MAX_AGE = 10 * 60 * 1000;
   const now = Date.now();
+  sweepEphemeralFlags();
   let changed = false;
   for (const [id, match] of activeMatches) {
     if (match.status === 'waiting' && now - match.createdAt > MAX_AGE) {
@@ -773,7 +806,7 @@ async function restorePlayerVoice(guild, match, userId) {
     return { ok: false, reason: 'no-saved-original' };
   }
   const channelId = match.originalChannels[userId];
-  restoringPlayers.set(String(userId), match.id);
+  restoringPlayers.set(String(userId), { matchId: match.id, expiresAt: Date.now() + RESTORE_TTL_MS });
   try {
     let member;
     try {
