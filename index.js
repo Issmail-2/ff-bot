@@ -18,9 +18,6 @@ if (!config.rankOneRoleId) config.rankOneRoleId = process.env.RANK_ONE_ROLE_ID |
 if (!config.setResultRoles) {
   config.setResultRoles = process.env.SET_RESULT_ROLE_IDS ? process.env.SET_RESULT_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310', '1466082863115145441', '1450458684428783616', '1546807156970487838', '1459133371874807921'];
 }
-if (!config.matchPingRoles) {
-  config.matchPingRoles = process.env.MATCH_PING_ROLE_IDS ? process.env.MATCH_PING_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1450458684428783616', '1546807156970487838', '1466082863115145441', '1459133371874807921'];
-}
 if (!config.matchViewerRoles) {
   config.matchViewerRoles = process.env.MATCH_VIEWER_ROLE_IDS ? process.env.MATCH_VIEWER_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1466082863115145441'];
 }
@@ -45,13 +42,27 @@ if (!config.pointsUsers) {
 if (!config.adminRoles) {
   config.adminRoles = process.env.ADMIN_ROLE_IDS ? process.env.ADMIN_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1450212500581646460', '1537318639395545139', '1506540916519731310'];
 }
-if (!config.staffRoles) {
-  config.staffRoles = process.env.STAFF_ROLE_IDS ? process.env.STAFF_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean) : ['1537318639395545139', '1506540916519731310', '1459133371874807921', '1466082863115145441'];
+// Roles that bypass match restrictions (voice exemptions, match pings, staff pings).
+// Historically these were force-overwritten from this one hardcoded array, which made
+// them impossible to configure via env vars or config.json. They are now resolved as
+// ENV > config.json > this default, so behaviour is unchanged unless you opt in.
+const DEFAULT_MATCH_STAFF_ROLES = ['1548338723593392198', '1537318639395545139', '1506540916519731310', '1546807156970487838', '1547776062400888912', '1548350425462210570', '1549201615850971216', '1548350896428158976', '1466082863115145441'];
+
+if (!Array.isArray(config.voiceExemptRoles) || config.voiceExemptRoles.length === 0) {
+  config.voiceExemptRoles = process.env.VOICE_EXEMPT_ROLE_IDS
+    ? process.env.VOICE_EXEMPT_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean)
+    : DEFAULT_MATCH_STAFF_ROLES;
 }
-const MATCH_STAFF_ROLES = ['1548338723593392198', '1537318639395545139', '1506540916519731310', '1546807156970487838', '1547776062400888912', '1548350425462210570', '1549201615850971216', '1548350896428158976', '1466082863115145441'];
-config.voiceExemptRoles = [...MATCH_STAFF_ROLES];
-config.matchPingRoles = [...MATCH_STAFF_ROLES];
-config.staffRoles = [...MATCH_STAFF_ROLES];
+if (!Array.isArray(config.matchPingRoles) || config.matchPingRoles.length === 0) {
+  config.matchPingRoles = process.env.MATCH_PING_ROLE_IDS
+    ? process.env.MATCH_PING_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean)
+    : DEFAULT_MATCH_STAFF_ROLES;
+}
+if (!Array.isArray(config.staffRoles) || config.staffRoles.length === 0) {
+  config.staffRoles = process.env.STAFF_ROLE_IDS
+    ? process.env.STAFF_ROLE_IDS.split(',').map(s => s.trim()).filter(Boolean)
+    : DEFAULT_MATCH_STAFF_ROLES;
+}
 if (!config.matchRewards) {
   config.matchRewards = { winnerMvp: 80, winner: 50, loserMvp: 30, loser: 10 };
 }
