@@ -23,4 +23,6 @@ rendertest6.js
 send_rules.js
 send_help.js
 send_announce.js
+verify-storage.js
+verify-invites.js
 .env

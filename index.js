@@ -83,6 +83,7 @@ const settingsStore = require('./utils/settings');
 const cheaterReports = require('./utils/cheaterReports');
 const { COLORS, BRANDING, progressBar, divider } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
+const inviteTracker = require('./utils/invites');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
@@ -373,7 +374,7 @@ const COMMANDS_INFO = `🎮 **HOW TO PLAY — FREE FIRE MATCHES**
 4️⃣ Players join **Team 1 / Team 2** — if the host set a join key you'll be asked for it. Once both teams are full the roster **locks**.
 5️⃣ A **result box** appears — the 2 team captains vote the **MVP** for the winning and losing side.
 6️⃣ Points are awarded automatically: Winner **+50**, Winner MVP **+80**, Loser **+10**, Loser MVP **+30**.
-7️⃣ Want to cancel a full match? Press **❌ Cancel Match** — each team needs 2 votes to cancel. You can revoke with **❌ Cancel My Vote**.
+7️⃣ Want to cancel a full match? The **host** can press **❌ Cancel Match** to cancel instantly. Anyone else can press it to start a vote — a majority of the players then votes to cancel. You can revoke with **❌ Cancel My Vote**. Lost the buttons? Type \`!cancelmatch\`.
 8️⃣ Track your rank with the **Rank #** nicknames or \`!leaderboard\`.
 
 👑 **RANK #1 PRIZE — AUTO ROLE**
@@ -384,6 +385,7 @@ The **#1 ranked player** automatically receives the Role #1 role.
 \`!play 2v2 | 3v3 | 4v4\` — host a match
 \`!esport 2v2 | 3v3 | 4v4\` — host an esport match
 \`!leaderboard\` — show the top players
+\`!cancelmatch\` — cancel the match you opened (works in any channel)
 \`!balance\` / \`!bal\` — check your points (\`!balance @user\` to check someone else)
 \`!stats [@user]\` — combined stats, rank, win rate and MVP count
 \`!rank [@user] [amo|esport]\` — profile card image for that mode with points, rank, W/L and MVP
@@ -545,14 +547,16 @@ function computeCombinedRanking() {
     .sort((a, b) => b[1].totalPoints - a[1].totalPoints || b[1].wins - a[1].wins || b[1].matchesPlayed - a[1].matchesPlayed);
 }
 
-async function applyRankOneRole(guild, ranked) {
+async function applyRankOneRole(guild, ranked, prefetchedMembers = null) {
   const roleId = config.rankOneRoleId;
   if (!roleId || !guild) return;
   const role = guild.roles.cache.get(roleId);
   if (!role) return;
   if (!ranked || ranked.length === 0) return;
   const top = ranked[0][0];
-  const members = await guild.members.fetch().catch(() => null);
+  // Reuse the member list when the caller already fetched it, instead of
+  // issuing a second full guild member fetch.
+  const members = prefetchedMembers || await guild.members.fetch().catch(() => null);
   if (!members) return;
   for (const m of members.values()) {
     if (m.id === top) continue;
@@ -581,11 +585,35 @@ async function renameWithRetry(member, nick, retries = 3) {
   return false;
 }
 
+// Only one nickname pass may run at a time. Previously it was fire-and-forget
+// from every match settlement, so several passes could overlap and each one did
+// its own full guild member fetch.
+let rankRenameRunning = false;
+let rankRenameQueued = false;
+
 async function applyRankNicknames(guild) {
+  if (rankRenameRunning) {
+    rankRenameQueued = true;
+    return { done: 0, failed: 0, skipped: true };
+  }
+  rankRenameRunning = true;
+  try {
+    return await runRankNicknames(guild);
+  } finally {
+    rankRenameRunning = false;
+    if (rankRenameQueued) {
+      rankRenameQueued = false;
+      setTimeout(() => applyRankNicknames(guild).catch(() => {}), 250);
+    }
+  }
+}
+
+async function runRankNicknames(guild) {
   const ranked = computeCombinedRanking();
 
   let done = 0;
   let failed = 0;
+  let changed = 0;
   const members = await guild.members.fetch().catch(() => null);
   for (let i = 0; i < ranked.length; i++) {
     const [uid] = ranked[i];
@@ -601,21 +629,25 @@ async function applyRankNicknames(guild) {
       ).replace(/^Rank\s+\d+\s*/i, '');
       const newNick = (`Rank ${rank} ${base}`).slice(0, 32);
       if (member.nickname !== newNick) {
+        // The 1800ms delay used to be unconditional, so a pass over N ranked
+        // players always burned N * 1.8s even when nothing needed renaming.
+        // Nickname writes are the rate-limited part, so pace only those.
+        if (changed > 0) await new Promise(r => setTimeout(r, 1800));
         const ok = await renameWithRetry(member, newNick);
+        changed++;
         if (!ok) {
           failed++;
           console.log(`[RANK] cannot rename ${uid} (${base}) after retries`);
         }
       }
       done++;
-      await new Promise(r => setTimeout(r, 1800));
     } catch (e) {
       failed++;
       console.log(`[RANK] rename error for ${uid}: ${e.message}`);
     }
   }
-  await applyRankOneRole(guild, ranked);
-  return { done, failed };
+  await applyRankOneRole(guild, ranked, members);
+  return { done, failed, changed };
 }
 
 async function ensureEsportChannels(guild) {
@@ -823,7 +855,14 @@ async function cancelMatch(guild, match, cancelText) {
 
 function cancelVotesNeeded(match) {
   const real = [...new Set([...(match.team1 || []), ...(match.team2 || [])])].filter(id => /^\d{15,20}$/.test(id));
-  return Math.max(1, real.length);
+  // This used to require EVERY player, which made a cancel impossible whenever
+  // anyone was offline or simply never clicked. A strict majority of the roster
+  // is enough to call the match off.
+  return Math.max(1, Math.ceil(real.length / 2));
+}
+
+function isMatchHost(match, userId) {
+  return !!match && match.creatorId === userId;
 }
 
 function isMatchPlayer(match, userId) {
@@ -842,7 +881,7 @@ function buildCancelVoteEmbed(match) {
   return new EmbedBuilder()
     .setTitle('⛔ CANCEL VOTE')
     .setColor(COLORS.danger)
-    .setDescription(`**${needed} vote${needed === 1 ? '' : 's'} needed from the players in this match** to cancel (${votes}/${needed}). Each player can vote once — the match keeps running until the vote passes.`)
+    .setDescription(`**${needed} vote${needed === 1 ? '' : 's'} needed from the players in this match** to cancel (${votes}/${needed}). Each player can vote once — the match keeps running until the vote passes. The match host can cancel instantly without a vote.`)
     .addFields(
       { name: '🗳️ VOTES', value: `\`\`\`${progressBar(votes, needed, 8)}\`\`\`\n${all.length ? all.map(id => `<@${id}>`).join(' ') : '*No votes yet*'}` },
       { name: '⚡ STATUS', value: status }
@@ -851,12 +890,20 @@ function buildCancelVoteEmbed(match) {
 }
 
 async function openCancelVote(guild, match, interaction) {
-  if (!isMatchPlayer(match, interaction.user.id) && !(interaction.member && interaction.member.permissions.has('Administrator'))) {
+  const isHost = isMatchHost(match, interaction.user.id);
+  const isAdmin = !!(interaction.member && interaction.member.permissions.has('Administrator'));
+  if (!isMatchPlayer(match, interaction.user.id) && !isAdmin) {
     return interaction.reply({ content: '❌ Only players in this match can start a cancel vote!', ephemeral: true });
   }
   const roomChannel = guild.channels.cache.get(match.channelId2) || guild.channels.cache.get(match.channelId);
   if (!roomChannel) {
     return interaction.reply({ content: '❌ Could not find the match channel.', ephemeral: true });
+  }
+
+  // The host who opened the match can always call it off, no vote required.
+  if (isHost) {
+    await cancelMatch(guild, match, `❌ **Match cancelled by the host** (<@${interaction.user.id}>)`);
+    return interaction.reply({ content: '❌ Match cancelled.', ephemeral: true });
   }
   const embed = buildCancelVoteEmbed(match);
   const row = new ActionRowBuilder().addComponents(
@@ -890,7 +937,7 @@ function buildMatchMenu(match) {
       .addOptions(
         new StringSelectMenuOptionBuilder().setEmoji('🛡️').setLabel('Request Staff').setDescription('Notify staff about this match').setValue('staffreq'),
         new StringSelectMenuOptionBuilder().setEmoji('🗳️').setLabel('Vote for MVP').setDescription('Winner/Loser MVP voting (captains/staff)').setValue('mvp'),
-        new StringSelectMenuOptionBuilder().setEmoji('❌').setLabel('Cancel Match').setDescription('Start a cancel vote (all players agree)').setValue('cancel'),
+        new StringSelectMenuOptionBuilder().setEmoji('❌').setLabel('Cancel Match').setDescription('Host cancels instantly; others start a vote').setValue('cancel'),
         new StringSelectMenuOptionBuilder().setEmoji('🚫').setLabel('Staff Cancel').setDescription('Immediate cancel (staff only)').setValue('staffcancel'),
         new StringSelectMenuOptionBuilder().setEmoji('↩️').setLabel('Cancel My Vote').setDescription('Clear your MVP vote').setValue('votecancel'),
         new StringSelectMenuOptionBuilder().setEmoji('🔄').setLabel('Reset Votes').setDescription('Reset all votes (roles mentioned in match)').setValue('resetvotes')
@@ -1396,6 +1443,12 @@ async function syncStoreEmbed(guild, channelOverride) {
 }
 
 const LIVE_LB_CHANNEL_ID = '1545413924483113040';
+// Cached id of the live leaderboard post. The old implementation fetched 30
+// messages, deleted the embed and re-sent it on every refresh — and it is
+// refreshed from ~12 call sites, several in tight pairs. Now we edit in place.
+let liveLeaderboardMsgId = null;
+let liveLeaderboardSyncing = false;
+let liveLeaderboardQueued = false;
 
 function buildCombinedLeaderboardEmbed() {
   const ranked = computeCombinedRanking();
@@ -1440,21 +1493,59 @@ function buildCombinedLeaderboardEmbed() {
 
 async function syncCombinedLeaderboard(guild) {
   if (!guild) return;
-  const channel = guild.channels.cache.get(LIVE_LB_CHANNEL_ID);
-  if (!channel) return;
+  // Collapse concurrent refreshes: if a sync is already running, remember that
+  // another one was requested and run exactly one more pass afterwards.
+  if (liveLeaderboardSyncing) {
+    liveLeaderboardQueued = true;
+    return;
+  }
+  liveLeaderboardSyncing = true;
   try {
-    const msgs = await channel.messages.fetch({ limit: 30 });
-    for (const m of msgs.values()) {
-      if (m.author.id === client.user.id && m.embeds && m.embeds[0] && String(m.embeds[0].title || '').includes('COMBINED LEADERBOARD')) {
-        await m.delete().catch(() => {});
+    const channel = guild.channels.cache.get(LIVE_LB_CHANNEL_ID);
+    if (!channel) return;
+    const embed = buildCombinedLeaderboardEmbed();
+    const payload = { embeds: [embed] };
+
+    if (liveLeaderboardMsgId) {
+      const existing = await channel.messages.fetch(liveLeaderboardMsgId).catch(() => null);
+      if (existing) {
+        await existing.edit(payload).catch(() => { liveLeaderboardMsgId = null; });
+        if (liveLeaderboardMsgId) {
+          console.log(`[LB] combined leaderboard updated in ${channel.id}`);
+          return;
+        }
+      } else {
+        liveLeaderboardMsgId = null;
       }
     }
+
+    if (!liveLeaderboardMsgId) {
+      // Recover the existing post after a restart, or post a new one.
+      const msgs = await channel.messages.fetch({ limit: 30 }).catch(() => null);
+      if (msgs) {
+        for (const m of msgs.values()) {
+          if (m.author.id === client.user.id && m.embeds && m.embeds[0] && String(m.embeds[0].title || '').includes('COMBINED LEADERBOARD')) {
+            liveLeaderboardMsgId = m.id;
+            await m.edit(payload).catch(() => { liveLeaderboardMsgId = null; });
+            break;
+          }
+        }
+      }
+      if (!liveLeaderboardMsgId) {
+        const sent = await channel.send(payload).catch(() => null);
+        if (sent) liveLeaderboardMsgId = sent.id;
+      }
+    }
+    if (liveLeaderboardMsgId) console.log(`[LB] combined leaderboard synced in ${channel.id}`);
   } catch (e) {
-    console.log('[LB] cleanup failed:', e.message);
+    console.log('[LB] sync failed:', e.message);
+  } finally {
+    liveLeaderboardSyncing = false;
+    if (liveLeaderboardQueued) {
+      liveLeaderboardQueued = false;
+      setTimeout(() => syncCombinedLeaderboard(guild).catch(() => {}), 50);
+    }
   }
-  const embed = buildCombinedLeaderboardEmbed();
-  await channel.send({ embeds: [embed] }).catch(e => console.log('[LB] send failed:', e.message));
-  console.log(`[LB] combined leaderboard synced in ${channel.id}`);
 }
 
 function refreshCombinedLeaderboard(guild) {
@@ -2728,6 +2819,17 @@ async function settleMatchResult(guild, match) {
   const loserTeam = match.loserTeam;
   if (!winnerTeam || !loserTeam) return;
 
+  // Idempotency guard. Discord keeps message components clickable for ~15
+  // minutes after a match is torn down, so without this a late click could
+  // re-enter this function and pay the same players a second time.
+  if (match.settled) {
+    console.log(`[SETTLE] match ${match.id} already settled — ignoring duplicate settle`);
+    return;
+  }
+  match.settled = true;
+  match.settledAt = Date.now();
+  manager.persistMatches();
+
   const winIds = winnerTeam === 1 ? match.team1 : match.team2;
   const loseIds = loserTeam === 1 ? match.team1 : match.team2;
 
@@ -2744,6 +2846,9 @@ async function settleMatchResult(guild, match) {
     storage.addPoints(uid, pts, 'loss', mode);
     lines.push(`💪 <@${uid}> +${pts}`);
   }
+
+  // Points are the one thing that must not be lost to an early restart.
+  try { storage.flushPoints(mode); } catch (e) { console.log('[SETTLE] flush failed:', e.message); }
 
   manager.logMatch({
     id: match.id,
@@ -3364,6 +3469,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 const adminCommands = {
   leaderboard: async (message, mode = 'amo') => {
     const sorted = storage.getLeaderboard(mode);
+    const rankedCount = storage.countRanked(mode);
     if (sorted.length === 0) {
       return message.reply('📊 No matches played yet!');
     }
@@ -3377,7 +3483,7 @@ const adminCommands = {
           return `${medal} <@${id}> — **${data.totalPoints} pts**  (${data.wins}W / ${data.losses}L)`;
         }).join('\n')
       )
-      .setFooter({ text: `${sorted.length} player${sorted.length === 1 ? '' : 's'} ranked • ${BRANDING}` });
+      .setFooter({ text: `${rankedCount} player${rankedCount === 1 ? '' : 's'} ranked • ${BRANDING}` });
 
     const rest = sorted.slice(3).map(([id, data], i) => {
       return `**#${i + 4}** <@${id}> — ${data.totalPoints} pts  (${data.wins}W / ${data.losses}L)`;
@@ -3689,14 +3795,22 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply('Usage: `&clear <number>` (1-100)');
     }
     try {
-      const fetched = await message.channel.messages.fetch({ limit: count });
-      const delCount = fetched.size;
+      // Fetch one extra so the command message can be excluded below. It used to
+      // be deleted separately and then handed to bulkDelete anyway, which always
+      // failed for that one message and made the reported count wrong.
+      const fetched = await message.channel.messages.fetch({ limit: Math.min(count + 1, 100) });
+      const targets = [...fetched.values()].filter(m => m.id !== message.id).slice(0, count);
+      const delCount = targets.length;
       await message.delete().catch(() => {});
-      await message.channel.bulkDelete(fetched).catch(async () => {
-        for (const m of fetched.values()) {
-          await m.delete().catch(() => {});
+      if (delCount > 0) {
+        const ok = await message.channel.bulkDelete(targets, true).then(() => true).catch(() => false);
+        if (!ok) {
+          for (const m of targets) {
+            if (m.id === message.id) continue;
+            await m.delete().catch(() => {});
+          }
         }
-      });
+      }
       const conf = await message.channel.send(`✅ Successfully cleared **${delCount}** message(s)!`).catch(() => null);
       if (conf) setTimeout(() => conf.delete().catch(() => {}), 4000);
     } catch (e) {
@@ -3960,6 +4074,27 @@ if (content === '&applyfix' || content === '!applyfix') {
     }
     const cleared = await manager.clearAllMatches(message.guild);
     await message.reply(`🧹 Cleared **${cleared}** stuck match(es)!`);
+  } else if (content === '!cancelmatch' || content.startsWith('!cancelmatch ')) {
+    // Host-initiated cancel. Works from any channel and needs no buttons, so a
+    // host is never stuck if the match menu is gone or unclickable.
+    const all = manager.getAllMatches();
+    const argId = (message.content.match(/\d{15,20}/) || [])[0];
+    const mentioned = message.mentions.users.first();
+    const targetId = (mentioned && mentioned.id) || argId || message.author.id;
+
+    let target = all.find(mt => isMatchHost(mt, targetId));
+    if (!target && argId) {
+      target = all.find(mt => (mt.team1 || []).includes(argId) || (mt.team2 || []).includes(argId));
+    }
+    if (!target) return message.reply('❌ No active match found for that user.');
+
+    const isSelf = targetId === message.author.id;
+    if (!isSelf && !hasCommandAccess(message.member)) {
+      return message.reply('❌ You can only cancel a match you opened yourself. Use **Cancel Match** in the match menu to ask the other players to vote.');
+    }
+    const label = isSelf ? 'you' : `<@${targetId}>`;
+    await cancelMatch(message.guild, target, `❌ **Match cancelled by the host** (<@${message.author.id}>)`);
+    return message.reply(`❌ **Match cancelled** — ${label}'s ${target.teamSize}v${target.teamSize} match was called off.`);
   } else if (content.startsWith('!cancelgame')) {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can cancel a match!');
@@ -4328,23 +4463,47 @@ client.on(Events.GuildMemberAdd, async (member) => {
   try {
   if (member.user.bot) return;
   const guild = member.guild;
+  const points = config.inviteBonus || 10;
+
+  // Guard against farming: the bonus is once per account, and the account must
+  // be old enough that a freshly made alt cannot collect it.
+  if (inviteTracker.hasJoinedBefore(member.id)) return;
+  const eligible = inviteTracker.isEligible(member.user);
+  if (!eligible.ok) {
+    console.log(`[INVITE] skipped ${member.id}: ${eligible.reason}`);
+    return;
+  }
+
   const cachedMap = client.invitesCache.get(guild.id);
-  await syncInviteCache(guild);
+  // A full guild.invites.fetch() on every single join is expensive and easy to
+  // rate limit on a busy server. Only refresh when the snapshot is stale.
+  if (inviteTracker.fetchAllowed() || !cachedMap) {
+    await syncInviteCache(guild);
+  } else {
+    inviteTracker.markFetched();
+  }
   const newMap = client.invitesCache.get(guild.id);
   if (!newMap || !cachedMap) return;
 
+  // Credit the invite that gained the most uses. Picking the first match in map
+  // order could credit the wrong inviter when two links were used at once.
   let usedInvite = null;
+  let bestDelta = 0;
   for (const [code, inv] of newMap) {
     const prev = cachedMap.get(code);
     if (prev && inv.uses > prev.uses) {
-      usedInvite = inv;
-      break;
+      const delta = inv.uses - prev.uses;
+      if (delta > bestDelta) {
+        bestDelta = delta;
+        usedInvite = inv;
+      }
     }
   }
   if (!usedInvite || !usedInvite.inviterId || usedInvite.inviterId === member.id) return;
 
-  const points = config.inviteBonus || 10;
+  inviteTracker.recordJoin(member.id);
   storage.adjustPoints(usedInvite.inviterId, points, 'amo');
+  try { storage.flushPoints('amo'); } catch (e) { /* non-fatal */ }
   console.log(`[INVITE] ${member.id} joined via invite of ${usedInvite.inviterId}; +${points} pts`);
   refreshCombinedLeaderboard(guild);
   const inviter = guild.members.cache.get(usedInvite.inviterId);
