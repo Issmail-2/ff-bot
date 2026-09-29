@@ -6,6 +6,10 @@ if (process.env.SUPERVISOR_ROLE_ID) config.supervisorRoleId = process.env.SUPERV
 if (!config.modes) config.modes = {};
 if (!config.modes.amo) config.modes.amo = { name:'amo', displayName:'Custom Room', command:'!play', matchChannelId: process.env.AMO_CHANNEL_ID||'1545315593450954762', ammoChannelId: process.env.AMMO_CHANNEL_ID||'1547567219167199352', voiceCategoryId: process.env.AMO_VOICE_CATEGORY||'1545316338145165332', logsCategoryId: process.env.AMO_LOGS_CATEGORY||'1545364636034138112', pointsFile:'./data/points.json' };
 if (!config.modes.esport) config.modes.esport = { name:'esport', displayName:'Esport', command:'!esport', matchChannelId: process.env.ESPORT_CHANNEL_ID||'1545388379309482037', voiceCategoryId: process.env.ESPORT_VOICE_CATEGORY||'1545386731686076476', logsCategoryId: process.env.ESPORT_LOGS_CATEGORY||'1545386732982374433', pointsFile:'./data/points_esport.json' };
+// "PvP Yes" is a second custom-room queue, hosted in the second apostado channel.
+// It shares the amo point file but keeps its own lobby channel, and it is the
+// mode that asks which lobby style to use.
+if (!config.modes.ammo) config.modes.ammo = { name:'ammo', displayName:'PvP Yes', command:'!playyes', matchChannelId: (config.modes.amo && config.modes.amo.ammoChannelId) || process.env.AMMO_CHANNEL_ID || '1547567219167199352', voiceCategoryId: config.modes.amo ? config.modes.amo.voiceCategoryId : undefined, logsCategoryId: config.modes.amo ? config.modes.amo.logsCategoryId : undefined, pointsFile:'./data/points.json', requiresStyle:true };
 if (!config.matchPoints) config.matchPoints = { winner: 80, loser: 30 };
 if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705>', team1:'<a:aHYPR_GREENDOTid:1545351146770796634>', team2:'<a:aredptid:1545350890989428829>' };
 
@@ -115,7 +119,7 @@ const jailModule = require('./utils/jail');
 const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const cheaterReports = require('./utils/cheaterReports');
-const { COLORS, BRANDING, progressBar, divider, withThumbnail } = require('./utils/ui');
+const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
 const inviteTracker = require('./utils/invites');
 const slash = require('./utils/slash');
@@ -745,7 +749,7 @@ function teamPanel(ids, matchMode, size, guild) {
   const slots = size || ids.length || 1;
   return Array.from({ length: slots }, (_, i) => {
     const uid = ids[i];
-    if (!uid) return `\`${i + 1}.\` ▫️ *empty*`;
+    if (!uid) return `\`${i + 1}.\` ‣ *waiting*`;
     const isMock = !/^\d{15,20}$/.test(uid);
     const badge = storage.getRankBadge(uid, matchMode);
     let name = isMock ? 'Mock' : 'User';
@@ -812,15 +816,16 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const full = pending === 0;
   const lockEmoji = match.key ? '🔒' : '🔓';
 
-  const bar = progressBar(joined, total, 10);
+  const strip = slotStrip(filled1, filled2, size);
 
   const embed = new EmbedBuilder()
     .setTitle(`${config.emojis.game} ${getModeConfig(mode).displayName} • ${size}v${size} LOBBY`)
     .setColor(full ? COLORS.success : COLORS.primary)
     .setDescription(
-      `${bar}\n` +
-      `**${joined}/${total}** players joined${full ? ' • ✅ **Full — starting soon**' : ` • ⏳ **${pending}** still needed`}\n` +
-      `👑 Host: <@${match.creatorId}>   •   🕐 Opened <t:${ts}:R>`
+      `${strip}  **${joined}/${total}**\n` +
+      `${full ? '✅ **Both teams full — starting soon**' : `⏳ **${pending}** more player${pending === 1 ? '' : 's'} needed`}\n` +
+      `🟩 Team 1  ·  ⬜ empty  ·  🟥 Team 2\n` +
+      `👑 Host <@${match.creatorId}>   ·   🕐 Opened <t:${ts}:R>`
     )
     .addFields(
       { name: `${config.emojis.team1} TEAM 1  \`${filled1}/${size}\``, value: t1Field || '*No players yet*', inline: true },
@@ -964,6 +969,26 @@ async function handlePlaySizePick(interaction) {
     });
   }
 
+  // Style dropdown: only PvP Yes uses one, so record it and continue into the
+  // size step for that mode.
+  if (interaction.customId === playFlow.STYLE_CUSTOM_ID) {
+    const style = interaction.values[0];
+    if (!playFlow.STYLES.some(s => s.value === style)) {
+      return interaction.reply({ content: '⚠️ Unknown style.', flags: 64 });
+    }
+    const label = playFlow.STYLES.find(s => s.value === style).label;
+    // If a size was already chosen before the style box appeared, carry straight
+    // on into room details rather than making them pick again.
+    if (draft.size) {
+      playFlow.setDraft(userId, { style });
+      return continueToRoomDetails(interaction, draft.size, draft.mode || 'amo', label);
+    }
+    playFlow.setDraft(userId, { style });
+    return interaction.update({
+      embeds: [], components: [], content: `🎨 **${label}** selected. Now pick your team size.`
+    }).catch(() => {});
+  }
+
   // Mode dropdown: just record the choice and re-render, so the player can then
   // pick a size against the right channel. Nothing is created yet.
   if (interaction.customId === `${playFlow.CUSTOM_ID}_mode`) {
@@ -1013,9 +1038,28 @@ async function handlePlaySizePick(interaction) {
     return interaction.reply({ content: '❌ You already have a pending match! Cancel it first.', flags: 64 });
   }
 
+  // "PvP Yes" asks for a lobby style before the room details. The chosen size is
+  // remembered so the style box can hand control straight back.
+  if (getModeConfig(mode).requiresStyle && !draft.style) {
+    playFlow.setDraft(userId, { size });
+    const parts = playFlow.buildStylePicker(userId, interaction.guild, size);
+    await interaction.reply({ ...parts, flags: 64 }).catch(() => {});
+    return;
+  }
+
+  return continueToRoomDetails(interaction, size, mode, draft.style);
+}
+
+// Creates the match, posts the setup message and opens the room-details modal.
+// Shared by the normal size path and the PvP Yes style path.
+async function continueToRoomDetails(interaction, size, mode, style) {
+  const userId = interaction.user.id;
+  const channelId = interaction.channel.id;
+
   // Create the match first, so if the modal fails the player can still retry
   // from the setup message rather than losing their slot.
   const match = manager.createMatch(userId, size, channelId, mode);
+  if (style) match.style = style;
 
   // The picker was transient navigation, so it is removed once chosen from.
   // The picker is a normal channel message so the host can click it, so the

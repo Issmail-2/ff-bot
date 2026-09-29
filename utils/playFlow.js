@@ -48,8 +48,47 @@ function sizeLabel(n) {
 // ---------------------------------------------------------------------------
 const MODES = [
   { value: 'amo', label: 'PvP — Custom Room', emoji: '⚔️', desc: 'Normal ranked custom room' },
+  { value: 'ammo', label: 'PvP Yes', emoji: '🎯', desc: 'Second custom queue, pick a style' },
   { value: 'esport', label: 'Esport', emoji: '🏆', desc: 'Esport lobby and points' }
 ];
+
+// "PvP Yes" matches ask which visual style to apply to the lobby artwork before
+// the room details are collected.
+const STYLES = [
+  { value: 'apostado', label: 'Apostado Style', emoji: '🟥', desc: 'Classic red apuesta lobby look' },
+  { value: 'zelika', label: 'Zelika Style', emoji: '🟣', desc: 'Purple Zelika themed lobby' },
+  { value: 'highlight', label: 'Highlight Style', emoji: '🟡', desc: 'Gold highlight lobby look' }
+];
+const STYLE_CUSTOM_ID = `${CUSTOM_ID}_style`;
+
+function buildStylePicker(userId, guild, size) {
+  const embed = withThumbnail(new EmbedBuilder()
+    .setTitle(`${'🎨'} Pick a Style • ${size}v${size}`)
+    .setColor(COLORS.gold)
+    .setDescription(
+      `Nice one, <@${userId}>! Last step — pick the style for your **${sizeLabel(size)}** lobby.\n` +
+      `After this you'll enter your room ID and passwords.`
+    )
+    .setFooter({ text: BRANDING }), guild);
+
+  const row = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(STYLE_CUSTOM_ID)
+      .setPlaceholder('🎨 Choose a lobby style…')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(STYLES.map(s =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(s.label)
+          .setDescription(s.desc)
+          .setValue(s.value)
+          .setEmoji(s.emoji)
+      ))
+  );
+
+  return { embeds: [embed], components: [row] };
+}
+
 
 function buildSizePicker(userId, guild, opts = {}) {
   const currentMode = MODES.some(m => m.value === opts.mode) ? opts.mode : 'amo';
@@ -204,6 +243,8 @@ function draftCount() {
 module.exports = {
   TEAM_SIZES,
   MODES,
+  STYLES,
+  STYLE_CUSTOM_ID,
   EXPIRY_MS,
   CUSTOM_ID,
   drafts,
@@ -211,6 +252,7 @@ module.exports = {
   sweep,
   sizeLabel,
   buildSizePicker,
+  buildStylePicker,
   buildRoomModal,
   buildSetupMessageParts,
   setDraft,

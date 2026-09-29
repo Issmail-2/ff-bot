@@ -32,3 +32,4 @@ probe-option.js
 .env
 verify-lobby.js
 verify-emoji.js
+verify-strip.js

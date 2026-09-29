@@ -31,6 +31,22 @@ function progressBar(current, total, size = 8) {
   return `${'█'.repeat(filled)}${'░'.repeat(size - filled)}`;
 }
 
+// A slot strip that shows which side each claimed place belongs to, instead of an
+// abstract bar. Reads far better than "███░░░░░░░" because the colour tells you
+// the shape of the lobby, not just how full it is.
+function slotStrip(team1Count, team2Count, teamSize) {
+  const size = teamSize || 2;
+  const cells = [];
+  for (let i = 0; i < size; i++) {
+    cells.push(i < team1Count ? '🟩' : '⬜');
+  }
+  cells.push('·');
+  for (let i = 0; i < size; i++) {
+    cells.push(i < team2Count ? '🟥' : '⬜');
+  }
+  return cells.join('');
+}
+
 function divider(char = '═', length = 26) {
   const ch = char && char.length ? char[0] : '═';
   return ch.repeat(length);
@@ -52,4 +68,4 @@ function withThumbnail(embed, guild) {
   return embed;
 }
 
-module.exports = { COLORS, BRANDING, progressBar, divider, createEmbed, withThumbnail };
+module.exports = { COLORS, BRANDING, progressBar, slotStrip, divider, createEmbed, withThumbnail };
