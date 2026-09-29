@@ -1472,17 +1472,20 @@ function buildMainMatchEmbed(match, guild) {
   ];
   if (resultFields.length) fields.push(...resultFields);
 
-  return new EmbedBuilder()
-    .setTitle(`${config.emojis.game} Custom Room • ${match.teamSize}v${match.teamSize} • ${display}`)
-    .setColor(resultColor(match))
-    .setDescription(
-      `${pingBlock ? `📣 ${pingBlock}\n\n` : ''}` +
-      codeLine('🔑 Room ID', match.roomId) + '\n' +
-      codeLine('🔒 Password', match.password)
-    )
-    .addFields(fields)
-    .setFooter({ text: BRANDING })
-    .setThumbnail(icon);
+  // withBanner() fills the image slot, which sits alongside the thumbnail.
+  // The per-match room channels get the same artwork as the lobby, so a player
+  // who jumps straight into the match channel still sees the server banner.
+  return withBanner(new EmbedBuilder()
+      .setTitle(`${config.emojis.game} Custom Room • ${match.teamSize}v${match.teamSize} • ${display}`)
+      .setColor(resultColor(match))
+      .setDescription(
+        `${pingBlock ? `📣 ${pingBlock}\n\n` : ''}` +
+        codeLine('🔑 Room ID', match.roomId) + '\n' +
+        codeLine('🔒 Password', match.password)
+      )
+      .addFields(fields)
+      .setFooter({ text: BRANDING })
+    .setThumbnail(icon), guild);
 }
 
 // Winner side goes gold, loser side goes red, everything else blurple.
@@ -1872,7 +1875,9 @@ function buildCombinedLeaderboardEmbed(guild) {
   if (rest) embed.addFields({ name: '─────────────', value: rest });
   embed.addFields({ name: '🤖 BOT STATUS', value: '🟢 **ON**' });
   embed.setFooter({ text: `${ranked.length} ranked • Updated <t:${ts}:R> • ${BRANDING}` });
-  return withThumbnail(embed, guild);
+  // The live leaderboard is one of the notice channels, so it carries the server
+  // banner above the standings. The icon stays as the thumbnail.
+  return withBanner(withThumbnail(embed, guild), guild);
 }
 
 async function syncCombinedLeaderboard(guild) {

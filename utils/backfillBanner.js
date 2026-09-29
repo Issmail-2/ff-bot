@@ -24,6 +24,13 @@ const TARGET_KEYS = [
   'applyQueueChannelId'
 ];
 
+// Channels that are not tracked in settings, named directly. Same treatment as
+// above: any bot message here without artwork gets the banner.
+const EXTRA_CHANNEL_IDS = [
+  '1546448959742943252',
+  '1545413924483113040'  // live leaderboard
+];
+
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
@@ -82,18 +89,26 @@ async function run(guild, botUserId) {
   const perChannel = {};
   let edited = 0;
 
+  // Settings-tracked channels first, then the ones named directly. De-duplicated,
+  // since a channel can be reachable both ways.
+  const targets = [];
   for (const key of TARGET_KEYS) {
+    if (settings[key]) targets.push({ label: key, id: settings[key] });
+  }
+  for (const id of EXTRA_CHANNEL_IDS) {
+    if (id && !targets.some(t => t.id === id)) targets.push({ label: `extra:${id}`, id });
+  }
+
+  for (const { label, id } of targets) {
     if (edited >= MAX_EDITS) break;
-    const channelId = settings[key];
-    if (!channelId) continue;
-    const channel = guild.channels.cache.get(channelId);
+    const channel = guild.channels.cache.get(id);
     if (!channel || !channel.isTextBased()) continue;
 
     let messages;
     try {
       messages = await channel.messages.fetch({ limit: HISTORY_LIMIT });
     } catch (e) {
-      errors.push(`${key}: fetch failed - ${e.message}`);
+      errors.push(`${label}: fetch failed - ${e.message}`);
       continue;
     }
 
@@ -120,14 +135,14 @@ async function run(guild, botUserId) {
       } catch (e) {
         // A single failure (message too old, missing permissions) must not abort
         // the whole channel.
-        errors.push(`${key}/${msg.id}: ${e.message}`);
+        errors.push(`${label}/${msg.id}: ${e.message}`);
       }
     }
-    if (count) perChannel[key] = count;
+    if (count) perChannel[label] = count;
   }
 
   markDone({ edited, channels: perChannel, at: new Date().toISOString() });
   return { ran: true, edited, channels: perChannel, errors };
 }
 
-module.exports = { run, bannerUrlFor, needsBanner, HISTORY_LIMIT, MAX_EDITS };
+module.exports = { run, bannerUrlFor, needsBanner, HISTORY_LIMIT, MAX_EDITS, EXTRA_CHANNEL_IDS };
