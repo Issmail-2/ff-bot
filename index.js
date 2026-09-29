@@ -1096,12 +1096,18 @@ async function handlePlaySizePick(interaction) {
   if (getModeConfig(mode).requiresStyle && !draft.style) {
     playFlow.setDraft(userId, { size });
     const parts = playFlow.buildStylePicker(userId, interaction.guild, size);
-    // Clear this message's dropdowns as the style box appears. interaction.reply()
-    // cannot touch the message the click came from, so the menu stayed live and
-    // fully clickable behind the style box. update() empties it, and the style
-    // box is a followUp instead.
-    await interaction.update({ embeds: [], components: [] }).catch(() => {});
-    return interaction.followUp({ ...parts, flags: 64 }).catch(() => {});
+    // The picker message becomes the style box, rather than a second message
+    // being posted for it. One message, one tracked id: it can be deleted after
+    // the modal opens, and it needs no interaction token to remove. Posting an
+    // ephemeral followUp instead meant the style box could only ever be deleted
+    // with the very token the modal needed.
+    return interaction.update(parts).catch(e => {
+      console.log('[PLAY] style picker update failed:', e.message);
+      return interaction.reply({
+        content: '⚠️ I could not show the style picker. Please run `!play` again.',
+        flags: 64
+      }).catch(() => {});
+    });
   }
 
   return continueToRoomDetails(interaction, size, mode, draft.style);
@@ -1118,37 +1124,42 @@ async function continueToRoomDetails(interaction, size, mode, style) {
   const match = manager.createMatch(userId, size, channelId, mode);
   if (style) match.style = style;
 
-  // The picker is transient navigation and is removed once the choices are made.
-  //
-  // Three different messages can be on screen at this point, and no single
-  // delete call covers all of them:
-  //   - the "Host a Match" box, a normal channel message, tracked by id
-  //   - the style box, posted with flags: 64, so ephemeral and not reachable with
-  //     the bot token at all -- only through the interaction that created it
-  //   - whichever one the final click came from
-  //
-  // Every attempt is tried rather than stopping at the first success. Short
-  // circuiting on the tracked id would delete the channel message and leave the
-  // ephemeral style box on screen, which is the exact thing being fixed.
-  const removals = [];
+  // Arm the config timeout.
+  if (match.configTimeout) clearTimeout(match.configTimeout);
+  match.configTimeout = setTimeout(() => {
+    timeoutMatch(interaction.guild, match.id, 'config');
+  }, 60 * 1000);
 
+  // The modal is the interaction's one and only response, so it goes FIRST.
+  //
+  // This used to be the other way round: the picker message was deleted and only
+  // then was the modal opened. Deleting the message an interaction came from
+  // invalidates that interaction's token, so showModal() failed and Discord
+  // showed the player a bare "This interaction failed" with nothing to click and
+  // no way to retry.
+  let modalOpen = false;
+  try {
+    await interaction.showModal(playFlow.buildRoomModal(match));
+    modalOpen = true;
+    playFlow.clearDraft(userId);
+  } catch (e) {
+    errLog('playFlow showModal failed for match ' + match.id, e);
+  }
+
+  // The interaction is now spent, so the picker can be removed safely. It is a
+  // normal channel message tracked by id, which is why no interaction token is
+  // needed here at all.
   const pickerId = playFlow.takePickerMessageId(userId);
   if (pickerId) {
-    removals.push(() => interaction.channel.messages.fetch(pickerId).then(m => m.delete()));
-  }
-  if (typeof interaction.deleteReply === 'function') {
-    removals.push(() => interaction.deleteReply());
-  }
-  if (interaction.message && interaction.message.id) {
-    removals.push(() => interaction.message.delete());
+    await interaction.channel.messages.fetch(pickerId)
+      .then(m => m.delete())
+      .catch(() => null);
   }
 
-  let removed = 0;
-  for (const remove of removals) {
-    try { await remove(); removed++; } catch (e) { /* already gone, or not ours */ }
-  }
-  if (!removed) console.log(`[PLAY] picker message survived deletion (user ${userId})`);
+  if (modalOpen) return;
 
+  // The form could not be opened. Leave a message with a button so the player can
+  // retry from a fresh interaction rather than being stuck at a dead end.
   const parts = playFlow.buildSetupMessageParts(match, userId, interaction.guild);
   const setupMsg = await interaction.channel.send(parts).catch(() => null);
   if (setupMsg) {
@@ -1161,26 +1172,10 @@ async function continueToRoomDetails(interaction, size, mode, style) {
   }
   manager.persistMatches();
 
-  // Arm the config timeout, and open the modal immediately so the player does
-  // not have to press a button to continue.
-  if (match.configTimeout) clearTimeout(match.configTimeout);
-  match.configTimeout = setTimeout(() => {
-    timeoutMatch(interaction.guild, match.id, 'config');
-  }, 60 * 1000);
-
-  try {
-    await interaction.showModal(playFlow.buildRoomModal(match));
-    playFlow.clearDraft(userId);
-    return;
-  } catch (e) {
-    errLog('playFlow showModal failed for match ' + match.id, e);
-    // Modal could not open. The setup message stays up with a button so the
-    // player can retry instead of being stuck.
-    return interaction.followUp({
-      content: '❌ I could not open the room details form. Use **⚙️ Enter Room Details** below to try again.',
-      flags: 64
-    }).catch(() => {});
-  }
+  return interaction.reply({
+    content: '❌ I could not open the room details form. Use **⚙️ Enter Room Details** below to try again.',
+    flags: 64
+  }).catch(e => console.log('[PLAY] could not report the modal failure:', e.message));
 }
 
 function isMatchPlayer(match, userId) {
