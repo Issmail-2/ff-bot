@@ -3493,7 +3493,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // The moderation submenu shares this handler; both prefixes resolve the
     // same match and then dispatch on the selected value.
-    if (cid === `${playFlow.CUSTOM_ID}_mode` || cid === `${playFlow.CUSTOM_ID}_size`) {
+    // The style menu has to be routed here too. handlePlaySizePick() handles all
+    // three picker dropdowns, but only the mode and size ids were reaching it --
+    // the amo-yes style menu fell through to 'Unknown selection'.
+    if (cid === playFlow.STYLE_CUSTOM_ID ||
+        cid === `${playFlow.CUSTOM_ID}_mode` ||
+        cid === `${playFlow.CUSTOM_ID}_size`) {
       return handlePlaySizePick(interaction);
     }
 

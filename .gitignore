@@ -33,3 +33,4 @@ probe-option.js
 verify-lobby.js
 verify-emoji.js
 verify-strip.js
+verify-routing.js
