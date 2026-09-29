@@ -96,15 +96,35 @@ function buildStylePicker(userId, guild, size) {
 
 
 function buildSizePicker(userId, guild, opts = {}) {
-  const currentMode = MODES.some(m => m.value === opts.mode) ? opts.mode : 'amo';
-  const modeLabel = MODES.find(m => m.value === currentMode).label.split('—')[0].trim();
+  // Each mode is hosted in its own channel, so the menu only offers the modes
+  // that are actually valid where the player is standing. Offering all three
+  // meant a mode could be picked here and then be refused at the very next
+  // step, which is a dead end the player cannot act on.
+  const allowed = Array.isArray(opts.allowedModes) && opts.allowedModes.length
+    ? MODES.filter(m => opts.allowedModes.includes(m.value))
+    : MODES;
+  // Discord rejects a select menu with zero options, so fall back rather than
+  // rendering nothing. A single option is still shown as a menu: hiding it
+  // would drop the default selection.
+  const offered = allowed.length ? allowed : MODES;
+  const single = offered.length === 1;
+
+  const currentMode = offered.some(m => m.value === opts.mode) ? opts.mode : offered[0].value;
+  const modeLabel = offered.find(m => m.value === currentMode).label.split('•')[0].trim();
 
   const embed = withThumbnail(new EmbedBuilder()
     .setTitle(`${STICKERS.game} Host a Match`)
     .setColor(COLORS.primary)
     .setDescription(
-      `Hey <@${userId}> — pick a **mode** and a **team size**, then enter your room details.\n\n` +
-      `Each team needs **N** players, so **4v4** needs **8** players in total.`
+      (single
+        ? `Hey <@${userId}> — this channel hosts **${modeLabel}** matches.\n\n`
+        : `Hey <@${userId}> — pick a **mode** and a **team size**, then enter your room details.\n\n`) +
+      `Each team needs **N** players, so **4v4** needs **8** players in total.` +
+      // With one mode pinned to this channel, say so rather than making them tap
+      // a dropdown that has nothing to choose between.
+      (single
+        ? `\n\nThe mode is already set for this channel. Pick your **team size** below to continue.`
+        : '')
     )
     .addFields(
       { name: '📋 Before you start', value: [
@@ -118,10 +138,10 @@ function buildSizePicker(userId, guild, opts = {}) {
   const modeRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`${CUSTOM_ID}_mode`)
-      .setPlaceholder('1️⃣ Choose your mode…')
+      .setPlaceholder((single ? `1️⃣ Mode: ${modeLabel} (set by this channel)` : '1️⃣ Choose your mode…'))
       .setMinValues(1)
       .setMaxValues(1)
-      .addOptions(MODES.map(m =>
+      .addOptions(offered.map(m =>
         new StringSelectMenuOptionBuilder()
           .setLabel(m.label)
           .setDescription(m.desc)

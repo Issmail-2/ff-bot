@@ -234,6 +234,26 @@ function getModeConfig(mode) {
   return config.modes[mode] || config.modes.amo;
 }
 
+// Which modes may be hosted from this channel.
+//
+// Every mode is pinned to its own channel, so a channel that is not a match
+// channel for any mode hosts none, and a channel that matches one hosts exactly
+// that one. The picker is built from this list so a mode that the channel does
+// not allow is never offered in the first place.
+function modesAllowedInChannel(channelId) {
+  const all = playFlow.MODES.map(m => m.value);
+  const allowed = all.filter(v => {
+    const ch = getModeConfig(v).matchChannelId;
+    return !ch || ch === channelId;
+  });
+  // Every mode is pinned to a channel, so a channel can legitimately host none of
+  // them -- a lobby voice channel, for instance. Falling back to the full list
+  // there would offer modes that the size-step gate then refuses, which is the
+  // dead end this function exists to prevent. So the command-level check decides:
+  // the picker is only ever built in a channel where at least one mode is valid.
+  return allowed;
+}
+
 function isInRequiredVoice(member) {
   if (!member || !member.voice) return false;
   return config.requiredVoiceChannels.includes(member.voice.channelId);
@@ -1003,22 +1023,34 @@ async function handlePlaySizePick(interaction) {
   }
 
   // Mode dropdown: just record the choice and re-render, so the player can then
-  // pick a size against the right channel. Nothing is created yet.
+  // pick a size. Nothing is created yet.
   if (interaction.customId === `${playFlow.CUSTOM_ID}_mode`) {
     const mode = interaction.values[0];
     if (!playFlow.MODES.some(m => m.value === mode)) {
       return interaction.reply({ content: '⚠️ Unknown mode.', flags: 64 });
     }
     const modeCfg = getModeConfig(mode);
+    // The menu only offers this channel's modes, so this should not fire. It stays
+    // as a guard for a stale message: a picker posted before a channel was
+    // reassigned, or one that is still in the client's component cache.
+    if (modeCfg.matchChannelId && modeCfg.matchChannelId !== interaction.channel.id) {
+      playFlow.clearDraft(userId);
+      return interaction.reply({
+        content: `❌ **${modeCfg.displayName}** matches must be started in <#${modeCfg.matchChannelId}>.\nUse \`!play\` there and pick **${modeCfg.displayName}** again.`,
+        flags: 64
+      });
+    }
     playFlow.setDraft(userId, { mode });
-    const parts = playFlow.buildSizePicker(userId, interaction.guild, { mode });
+    const allowed = modesAllowedInChannel(interaction.channel.id);
+    const parts = playFlow.buildSizePicker(userId, interaction.guild, { mode, allowedModes: allowed });
+    // Exactly one response per interaction. The menu is updated in place, which is
+    // all that is needed when this channel hosts a single mode -- adding a
+    // "now pick a size" prompt on top of that would be noise.
     await interaction.update(parts).catch(() => {});
-    // Every mode is hosted in the same channel, so name that one channel rather
-    // than listing a per-mode pair. The old version read modeCfg.ammoChannelId,
-    // which amo-yes does not have, producing a literal "<#undefined>".
+    if (allowed.length === 1) return;
     const where = modeCfg.matchChannelId ? `<#${modeCfg.matchChannelId}>` : 'the match channel';
     return interaction.followUp({
-      content: `✅ Mode set to **${modeCfg.displayName}**. Now pick a team size.\n📍 All matches are hosted in ${where}.`,
+      content: `✅ Mode set to **${modeCfg.displayName}**. Now pick a team size.\n📍 **${modeCfg.displayName}** matches are hosted in ${where}.`,
       flags: 64
     }).catch(() => {});
   }
@@ -3179,7 +3211,12 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(blacklistMessage(bl));
     }
 
-    playFlow.setDraft(message.author.id, { mode });
+    // Only the modes this channel actually hosts. The picker used to offer all
+    // three everywhere, so a player could pick a mode the channel does not
+    // allow and only be told at the size step, one click too late to be useful.
+    const allowedModes = modesAllowedInChannel(message.channel.id);
+    const preselected = allowedModes.includes(mode) ? mode : allowedModes[0];
+    playFlow.setDraft(message.author.id, { mode: preselected });
 
     // A size typed after the command is ignored, but say so rather than
     // silently doing something different from what they asked for.
@@ -3190,7 +3227,10 @@ client.on(Events.MessageCreate, async (message) => {
 
     // Public, because the picker needs to persist for the host to click it
     // after the message is sent (ephemeral replies cannot host follow-ups).
-    const picker = playFlow.buildSizePicker(message.author.id, message.guild, { mode });
+    const picker = playFlow.buildSizePicker(message.author.id, message.guild, {
+      mode: preselected,
+      allowedModes
+    });
     const msg = await message.channel.send(picker).catch(() => null);
     if (msg) {
       // Remembered so the picker can be replaced/cleaned up later.
