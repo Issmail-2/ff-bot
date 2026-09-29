@@ -221,19 +221,6 @@ function getModeConfig(mode) {
   return config.modes[mode] || config.modes.amo;
 }
 
-function parseTeamSize(arg) {
-  if (!arg) return null;
-  const m = arg.toLowerCase().match(/^(\d+)[vx](\d+)$/);
-  if (m) {
-    const a = parseInt(m[1]);
-    const b = parseInt(m[2]);
-    if (a === b && [2, 3, 4].includes(a)) return a;
-    return null;
-  }
-  if (/^[234]$/.test(arg.trim())) return parseInt(arg.trim());
-  return null;
-}
-
 function isInRequiredVoice(member) {
   if (!member || !member.voice) return false;
   return config.requiredVoiceChannels.includes(member.voice.channelId);
@@ -394,12 +381,12 @@ async function unjailMember(guild, member, role, affected, removedRoles) {
 const COMMANDS_INFO = `🎮 **HOW TO PLAY — FREE FIRE MATCHES**
 ━━━━━━━━━━━━━━━━━━━━━━━━
 1️⃣ Join a **lobby voice channel**.
-2️⃣ Type \`!play 2v2\`, \`!play 3v3\` or \`!play 4v4\` in the matches channel (\`!esport …\` in the esport channel).
+2️⃣ Type \`!play\` in the matches channel, then pick your mode and team size from the menus.
 3️⃣ Click **🏠 Room Config** and enter the Room ID / Password (numbers only).
 4️⃣ Players join **Team 1 / Team 2** — if the host set a join key you'll be asked for it. Once both teams are full the roster **locks**.
 5️⃣ A **result box** appears — the 2 team captains vote the **MVP** for the winning and losing side.
 6️⃣ Points are awarded automatically: Winner **+50**, Winner MVP **+80**, Loser **+10**, Loser MVP **+30**.
-7️⃣ Want to cancel a full match? The **host** can press **❌ Cancel Match** to cancel instantly. Anyone else can press it to start a vote — a majority of the players then votes to cancel. You can revoke with **❌ Cancel My Vote**. Lost the buttons? Type \`!cancelmatch\`.
+7️⃣ Want to cancel a full match? The **host** or a **staff member** can press **❌ Cancel Match (Host)** to cancel it. Lost the buttons? Type \`!cancelmatch\`.
 8️⃣ Track your rank with the **Rank #** nicknames or \`!leaderboard\`.
 
 👑 **RANK #1 PRIZE — AUTO ROLE**
@@ -407,10 +394,8 @@ The **#1 ranked player** automatically receives the Role #1 role.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
-\`!play\` - **host a match**: choose **amo-no**, **amo-yes** or **e-sport**, then 2v2/3v3/4v4 from the menus, then enter your room ID
-\`!play 2v2 | 3v3 | 4v4\` — host a match directly
-\`!esport\` — same picker, preselected to Esport
-\`!esport 2v2 | 3v3 | 4v4\` — host an esport match
+\`!play\` — host a match: pick **amo-no**, **amo-yes** or **e-sport**, then 2v2/3v3/4v4, then enter your room ID
+\`!esport\` — same picker, preselected to e-sport
 \`!leaderboard\` — show the top players
 \`!cancelmatch\` — cancel the match you opened (works in any channel)
 \`!balance\` / \`!bal\` — check your points (\`!balance @user\` to check someone else)
@@ -1804,7 +1789,7 @@ function buildCombinedLeaderboardEmbed(guild) {
     .setColor(COLORS.gold);
 
   if (!ranked.length) {
-    embed.setDescription('No matches played yet.\n\nRun `!play 2v2` to host the first match.')
+    embed.setDescription('No matches played yet.\n\nRun `!play` to host the first match.')
       .addFields({ name: '🤖 BOT STATUS', value: '🟢 **ON**' })
       .setFooter({ text: `Updated <t:${ts}:R> • ${BRANDING}` });
     return withThumbnail(embed, guild);
@@ -2861,7 +2846,7 @@ client.once(Events.ClientReady, async (c) => {
       console.log(`[DATA] ${mode}: load failed:`, e.message);
     }
   }
-  c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
+  c.user.setActivity('Free Fire | !play', { type: 3 });
   // An earlier version registered a /play slash command. It has been removed,
   // so clear the global command set once -- otherwise Discord keeps showing a
   // command the bot no longer answers. A failure here is not fatal.
@@ -3016,31 +3001,9 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply('❌ You already have a pending match! Cancel it first.');
     }
 
-    const args = content.split(/\s+/);
-    const typedSize = parseTeamSize(args[1]);
-
-    // Bare "!play" or "!esport" opens the mode + size picker instead of asking
-    // the player to remember the syntax. "!play 3v3" still works.
-    if (!typedSize) {
-      if (!isInRequiredVoice(message.member)) {
-        return message.reply(voiceCheckMessage());
-      }
-      const bl0 = blacklistModule.isBlacklisted(message.author.id);
-      if (bl0) {
-        return message.reply(blacklistMessage(bl0));
-      }
-      playFlow.setDraft(message.author.id, { mode });
-      // Public, because the picker needs to persist for the host to click it
-      // after the message is sent (ephemeral replies cannot host follow-ups).
-      const picker = playFlow.buildSizePicker(message.author.id, message.guild, { mode });
-      const msg = await message.channel.send(picker).catch(() => null);
-      if (msg) {
-        // Remembered so the picker can be replaced/cleaned up later.
-        playFlow.pickMessageIds.set(message.author.id, msg.id);
-      }
-      return;
-    }
-
+    // "!play" and "!esport" both open the mode + size picker. The old direct
+    // form ("!play 3v3") is gone: one way to host, so nobody has to remember
+    // syntax or get it wrong.
     if (!isInRequiredVoice(message.member)) {
       return message.reply(voiceCheckMessage());
     }
@@ -3050,13 +3013,26 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(blacklistMessage(bl));
     }
 
-    const match = manager.createMatch(message.author.id, typedSize, message.channel.id, mode);
+    playFlow.setDraft(message.author.id, { mode });
 
-    const parts = playFlow.buildSetupMessageParts(match, message.author.id, message.guild);
-    const msg = await message.reply({ embeds: parts.embeds, components: parts.components });
-    match.message = msg.id;
-    match.setupMessageId = msg.id;
-    manager.persistMatches();
+    // A size typed after the command is ignored, but say so rather than
+    // silently doing something different from what they asked for.
+    const typed = content.split(/\s+/)[1];
+    const note = /^\d\s*v\s*\d$/i.test(String(typed || '').trim())
+      ? `\n\n*You typed \`${typed}\` — pick the size from the menu below instead.*`
+      : '';
+
+    // Public, because the picker needs to persist for the host to click it
+    // after the message is sent (ephemeral replies cannot host follow-ups).
+    const picker = playFlow.buildSizePicker(message.author.id, message.guild, { mode });
+    const msg = await message.channel.send(picker).catch(() => null);
+    if (msg) {
+      // Remembered so the picker can be replaced/cleaned up later.
+      playFlow.pickMessageIds.set(message.author.id, msg.id);
+    }
+    if (note) {
+      return message.reply(note).catch(() => {});
+    }
     return;
   }
 
@@ -3418,7 +3394,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (![2, 3, 4].includes(match.teamSize)) {
       console.log('[MODAL] invalid team size on match', match.teamSize);
-      return interaction.editReply({ content: '❌ Invalid team size. Start the match with `!play 2v2/3v3/4v4`!' });
+      return interaction.editReply({ content: '❌ Invalid team size. Start the match with `!play` and pick from the menu!' });
     }
 
     const invalidFields = [];
