@@ -81,7 +81,7 @@ const jailModule = require('./utils/jail');
 const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const cheaterReports = require('./utils/cheaterReports');
-const { COLORS, BRANDING, progressBar, divider } = require('./utils/ui');
+const { COLORS, BRANDING, progressBar, divider, withThumbnail } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
 const inviteTracker = require('./utils/invites');
 
@@ -744,6 +744,13 @@ function buildSetupMessageParts(match, hostId) {
   return { embeds: [embed], components: [buttons] };
 }
 
+// Room ID / password / join key now use Discord inline code, which is
+// click-to-copy. They were in fenced blocks, which render as a full-width grey
+// box and do NOT support the copy-on-click the label advertised.
+function codeLine(label, value) {
+  return `**${label}**  \`${value || '—'}\`   *(click to copy)*`;
+}
+
 function buildMatchBoxEmbed(guild, match, creatorUser) {
   const mode = match.mode || 'amo';
   const size = match.teamSize || 2;
@@ -788,19 +795,19 @@ async function updateMatchChannel(guild, match) {
     const badge = storage.getRankBadge(id, match.mode || 'amo');
     return badge ? `${getName(id)} \`[${badge}]\`` : getName(id);
   }).join('\n') : 'Empty';
-  const embed = new EmbedBuilder()
+  const embed = withThumbnail(new EmbedBuilder()
     .setTitle(`${config.emojis.game} Room Details`)
     .setColor(COLORS.gold)
     .setDescription(
-      `**🔑 Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
-      `**🔒 Password** _(hover to copy)_\n\`\`\`${match.password || '—'}\`\`\`` +
-      (match.key ? `\n**🗝️ Join Key**\n\`\`\`${match.key}\`\`\`` : '')
+      codeLine('🔑 Room ID', match.roomId) + '\n' +
+      codeLine('🔒 Password', match.password) +
+      (match.key ? '\n' + codeLine('🗝️ Join Key', match.key) : '')
     )
     .addFields(
       { name: `${config.emojis.team1} TEAM 1 — \`${(match.team1 || []).length}/${match.teamSize}\``, value: list1 || '*Empty*', inline: true },
       { name: `${config.emojis.team2} TEAM 2 — \`${(match.team2 || []).length}/${match.teamSize}\``, value: list2 || '*Empty*', inline: true }
     )
-    .setFooter({ text: BRANDING });
+    .setFooter({ text: BRANDING }), guild);
   let infoMsg = null;
   if (match.roomInfoMessageId) {
     infoMsg = await channel.messages.fetch(match.roomInfoMessageId).catch(() => null);
@@ -938,26 +945,37 @@ async function openCancelVote(guild, match, interaction) {
 }
 
 function buildMatchMenu(match) {
+  // Split into themed menus. Six unrelated options in one dropdown was a wall
+  // of text with no grouping, and it read worst on mobile.
   const row = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`matchmenu_${match.id}`)
-      .setPlaceholder('⚙️ Match Actions (tap to select)')
+      .setPlaceholder('⚙️ Match Actions')
       .setMinValues(1)
       .setMaxValues(1)
       .addOptions(
+        new StringSelectMenuOptionBuilder().setEmoji('🗳️').setLabel('Vote for MVP').setDescription('Winner / Loser MVP voting').setValue('mvp'),
         new StringSelectMenuOptionBuilder().setEmoji('🛡️').setLabel('Request Staff').setDescription('Notify staff about this match').setValue('staffreq'),
-        new StringSelectMenuOptionBuilder().setEmoji('🗳️').setLabel('Vote for MVP').setDescription('Winner/Loser MVP voting (captains/staff)').setValue('mvp'),
-        new StringSelectMenuOptionBuilder().setEmoji('❌').setLabel('Cancel Match').setDescription('Host cancels instantly; others start a vote').setValue('cancel'),
-        new StringSelectMenuOptionBuilder().setEmoji('🚫').setLabel('Staff Cancel').setDescription('Immediate cancel (staff only)').setValue('staffcancel'),
+        new StringSelectMenuOptionBuilder().setEmoji('❌').setLabel('Cancel Match').setDescription('Host cancels now; others start a vote').setValue('cancel')
+      )
+  );
+  const modRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`matchmodmenu_${match.id}`)
+      .setPlaceholder('🔧 Moderation')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(
         new StringSelectMenuOptionBuilder().setEmoji('↩️').setLabel('Cancel My Vote').setDescription('Clear your MVP vote').setValue('votecancel'),
-        new StringSelectMenuOptionBuilder().setEmoji('🔄').setLabel('Reset Votes').setDescription('Reset all votes (roles mentioned in match)').setValue('resetvotes')
+        new StringSelectMenuOptionBuilder().setEmoji('🔄').setLabel('Reset Votes').setDescription('Reset all votes (staff only)').setValue('resetvotes'),
+        new StringSelectMenuOptionBuilder().setEmoji('🚫').setLabel('Staff Cancel').setDescription('Immediate cancel (staff only)').setValue('staffcancel')
       )
   );
   const voteRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`mvpwinner_${match.id}`).setEmoji('🏆').setLabel('Vote for MVP W').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`mvploser_${match.id}`).setEmoji('💪').setLabel('Vote for MVP L').setStyle(ButtonStyle.Secondary)
   );
-  return [row, voteRow];
+  return [row, modRow, voteRow];
 }
 
 async function handleStaffReq(interaction, match) {
@@ -1211,6 +1229,7 @@ async function clearVotePanel(guild, match) {
 
 function buildMainMatchEmbed(match, guild) {
   const display = getModeConfig(match.mode).displayName;
+  const icon = guild && guild.iconURL ? guild.iconURL({ size: 128 }) : null;
   const t1Field = teamPanel(match.team1, match.mode || 'amo', match.teamSize, guild) || '*Empty*';
   const t2Field = teamPanel(match.team2, match.mode || 'amo', match.teamSize, guild) || '*Empty*';
 
@@ -1219,11 +1238,30 @@ function buildMainMatchEmbed(match, guild) {
   const roleMentions = (config.matchPingRoles || []).map(id => `<@&${id}>`).join(' ');
   const pingBlock = [mentions, roleMentions].filter(Boolean).join('\n');
 
+  // Result state gets colour-coded fields and a points breakdown, instead of
+  // one flat status line that mixed both MVPs together on a single row.
+  const resultFields = [];
   let status = '⏳ **Waiting for captains to vote...**';
-  const votes = [];
-  if (match.winnerVoteSet && match.mvpWinnerId) votes.push(`🏆 **Winner MVP:** <@${match.mvpWinnerId}>`);
-  if (match.loserVoteSet && match.mvpLoserId) votes.push(`💪 **Loser MVP:** <@${match.mvpLoserId}>`);
-  if (votes.length) status = votes.join('       ');
+
+  if (match.winnerVoteSet && match.mvpWinnerId) {
+    resultFields.push({
+      name: '🏆 WINNER MVP',
+      value: `<@${match.mvpWinnerId}>\n**+${REWARDS.winnerMvp}** pts`,
+      inline: true
+    });
+  }
+  if (match.loserVoteSet && match.mvpLoserId) {
+    resultFields.push({
+      name: '💪 LOSER MVP',
+      value: `<@${match.mvpLoserId}>\n**+${REWARDS.loserMvp}** pts`,
+      inline: true
+    });
+  }
+  if (resultFields.length) {
+    status = resultFields.length === 2
+      ? '✅ **Both MVPs decided**'
+      : '⏳ **One captain vote left**';
+  }
   if (match.resultStatus) status = String(match.resultStatus);
 
   const fields = [
@@ -1231,17 +1269,26 @@ function buildMainMatchEmbed(match, guild) {
     { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field, inline: true },
     { name: '⚡ STATUS', value: status || '—' }
   ];
+  if (resultFields.length) fields.push(...resultFields);
 
   return new EmbedBuilder()
     .setTitle(`${config.emojis.game} Custom Room • ${match.teamSize}v${match.teamSize} • ${display}`)
-    .setColor(COLORS.primary)
+    .setColor(resultColor(match))
     .setDescription(
       `${pingBlock ? `📣 ${pingBlock}\n\n` : ''}` +
-      `**🔑 Room ID** _(hover to copy)_\n\`\`\`${match.roomId}\`\`\`\n` +
-      `**🔒 Password** _(hover to copy)_\n\`\`\`${match.password}\`\`\``
+      codeLine('🔑 Room ID', match.roomId) + '\n' +
+      codeLine('🔒 Password', match.password)
     )
     .addFields(fields)
-    .setFooter({ text: BRANDING });
+    .setFooter({ text: BRANDING })
+    .setThumbnail(icon);
+}
+
+// Winner side goes gold, loser side goes red, everything else blurple.
+function resultColor(match) {
+  if (match && match.settled) return COLORS.gold;
+  if (match && match.resultStatus && /fail|error|didn't match|expired/i.test(String(match.resultStatus))) return COLORS.danger;
+  return COLORS.primary;
 }
 
 async function updateResultBox(guild, match) {
@@ -1437,18 +1484,23 @@ async function ensureStoreChannel(guild) {
 }
 
 function buildStoreEmbed(items) {
-  const list = items.map((it, i) => {
+  // The internal numeric id and the "1. 2. 3." numbering were both removed:
+  // players pick items through the Buy button and select menu, so surfacing the
+  // id was noise, and the numbering did not line up with menu ordering anyway.
+  const list = items.map(it => {
     const icon = it.type === 'role' ? '👑' : '💎';
-    const rolePart = it.type === 'role' && it.roleId ? ` → <@&${it.roleId}>` : '';
-    const stockPart = it.stock !== null && it.stock !== undefined ? ` • 📦 ${storeModule.isSoldOut(it) ? '**SOLD OUT**' : `**${it.stock}** left`}` : '';
-    return `${i + 1}. ${icon} **${it.name}** — **${it.cost} pts** \`${it.id}\`${rolePart}${stockPart}`;
-  }).join('\n') || '*No items yet. Supervisors can add items with `&storeadd`.*';
+    const rolePart = it.type === 'role' && it.roleId ? `\n↳ <@&${it.roleId}>` : '';
+    const stockPart = it.stock !== null && it.stock !== undefined
+      ? `  📦 ${storeModule.isSoldOut(it) ? '**SOLD OUT**' : `**${it.stock}** left`}`
+      : '';
+    return `${icon} **${it.name}**  —  **${it.cost}** pts${stockPart}${rolePart}`;
+  }).join('\n') || '*No items yet. Supervisors can add items with `!storeadd`.*';
   return new EmbedBuilder()
-    .setTitle('🛒 FREE FIRE STORE')
+    .setTitle('🛒 STORE')
     .setColor(COLORS.info)
-    .setDescription(`${list}`)
+    .setDescription(list)
     .addFields(
-      { name: '⚙️ HOW TO BUY', value: 'Press the **🛒 Buy** button below and choose an item. The price is **deducted from your balance automatically**. Items with a 📦 counter are limited and sell out at zero.' }
+      { name: '⚙️ HOW TO BUY', value: 'Press the **🛒 Buy** button below and choose an item.\nThe price is **deducted from your balance automatically**.\nItems with a 📦 counter are limited.' }
     )
     .setFooter({ text: BRANDING });
 }
@@ -1496,7 +1548,7 @@ let liveLeaderboardMsgId = null;
 let liveLeaderboardSyncing = false;
 let liveLeaderboardQueued = false;
 
-function buildCombinedLeaderboardEmbed() {
+function buildCombinedLeaderboardEmbed(guild) {
   const ranked = computeCombinedRanking();
   const losses = {};
   for (const mode of ['amo', 'esport']) {
@@ -1516,25 +1568,37 @@ function buildCombinedLeaderboardEmbed() {
     .setColor(COLORS.gold);
 
   if (!ranked.length) {
-    embed.setDescription('No matches played yet.');
-    embed.addFields({ name: '🤖 BOT STATUS', value: '🟢 **ON**' });
-    embed.setFooter({ text: `Updated <t:${ts}:R> • ${BRANDING}` });
-    return embed;
+    embed.setDescription('No matches played yet.\n\nRun `!play 2v2` to host the first match.')
+      .addFields({ name: '🤖 BOT STATUS', value: '🟢 **ON**' })
+      .setFooter({ text: `Updated <t:${ts}:R> • ${BRANDING}` });
+    return withThumbnail(embed, guild);
   }
 
-  const podium = ranked.slice(0, 3).map(([id, p], i) => {
+  const winPct = (id, p) => {
+    const played = (p.wins || 0) + (losses[id] || 0);
+    return played ? `${Math.round(((p.wins || 0) / played) * 100)}%` : '—';
+  };
+
+  // Podium gets its own field per rank so the medals get real visual weight
+  // instead of three lines of identical body text.
+  const podiumFields = ranked.slice(0, 3).map(([id, p], i) => {
     const medal = ['🥇', '🥈', '🥉'][i];
-    return `${medal} <@${id}> — **${p.totalPoints} pts**  (${p.wins}W / ${losses[id] || 0}L)`;
-  }).join('\n');
+    return {
+      name: `${medal} #${i + 1}`,
+      value: `<@${id}>\n**${fmtNum(p.totalPoints)}** pts  ·  ${p.wins || 0}W/${losses[id] || 0}L  ·  ${winPct(id, p)}`,
+      inline: true
+    };
+  });
+
   const rest = ranked.slice(3, 10).map(([id, p], i) => {
-    return `**#${i + 4}** <@${id}> — ${p.totalPoints} pts  (${p.wins}W / ${losses[id] || 0}L)`;
+    return `**#${i + 4}**  <@${id}>  ·  **${fmtNum(p.totalPoints)}** pts  ·  ${p.wins || 0}W/${losses[id] || 0}L`;
   }).join('\n');
 
-  embed.setDescription(`${podium}`);
-  if (rest) embed.addFields({ name: `─────────────`, value: rest });
+  embed.addFields(podiumFields);
+  if (rest) embed.addFields({ name: '─────────────', value: rest });
   embed.addFields({ name: '🤖 BOT STATUS', value: '🟢 **ON**' });
   embed.setFooter({ text: `${ranked.length} ranked • Updated <t:${ts}:R> • ${BRANDING}` });
-  return embed;
+  return withThumbnail(embed, guild);
 }
 
 async function syncCombinedLeaderboard(guild) {
@@ -1549,7 +1613,7 @@ async function syncCombinedLeaderboard(guild) {
   try {
     const channel = guild.channels.cache.get(LIVE_LB_CHANNEL_ID);
     if (!channel) return;
-    const embed = buildCombinedLeaderboardEmbed();
+    const embed = buildCombinedLeaderboardEmbed(guild);
     const payload = { embeds: [embed] };
 
     if (liveLeaderboardMsgId) {
@@ -3144,8 +3208,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     let kind = null;
     let matchId = null;
 
-    if (cid.startsWith('matchmenu_')) {
-      const mId = cid.slice('matchmenu_'.length);
+    // The moderation submenu shares this handler; both prefixes resolve the
+    // same match and then dispatch on the selected value.
+    if (cid.startsWith('matchmenu_') || cid.startsWith('matchmodmenu_')) {
+      const prefix = cid.startsWith('matchmodmenu_') ? 'matchmodmenu_' : 'matchmenu_';
+      const mId = cid.slice(prefix.length);
       if (!mId) return interaction.reply({ content: '⚠️ Unknown selection.', ephemeral: true });
       const match = manager.getMatch(mId);
       if (!match) return interaction.reply({ content: '⚠️ This match no longer exists.', ephemeral: true });
@@ -3663,9 +3730,11 @@ async function renderRankCard(member, uid, primary, primaryName, primaryRank, se
   const cv = createCanvas(W, H);
   const ctx = cv.getContext('2d');
 
+  // Derived from COLORS so the card and the embeds can never drift apart again.
+  const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
   const ff = rankCardFontFamily() || 'sans-serif';
-  const accent = '#f5a623';
-  const accent2 = '#5865f2';
+  const accent = hex(COLORS.gold);
+  const accent2 = hex(COLORS.primary);
   const white = '#ffffff';
   const dim = '#9aa7bd';
 

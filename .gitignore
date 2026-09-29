@@ -26,4 +26,6 @@ send_announce.js
 verify-storage.js
 verify-invites.js
 verify-matches.js
+verify-ui.js
+probe-option.js
 .env
