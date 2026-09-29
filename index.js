@@ -92,6 +92,7 @@ const blacklistModule = require('./utils/blacklist');
 const jailModule = require('./utils/jail');
 const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
+const backfillBanner = require('./utils/backfillBanner');
 const cheaterReports = require('./utils/cheaterReports');
 const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail, withBanner } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
@@ -2923,6 +2924,18 @@ client.once(Events.ClientReady, async (c) => {
   for (const g of c.guilds.cache.values()) {
     runEnsure(g);
   }
+  // One-time: add the server banner to messages posted before withBanner()
+  // existed. Runs after the channel ensure above so the ids are populated, and
+  // it records itself in settings so it never runs twice.
+  for (const g of c.guilds.cache.values()) {
+    backfillBanner.run(g, c.user.id)
+      .then(r => {
+        if (r.ran) {
+          console.log(`[BANNER] backfill edited ${r.edited} message(s)`, r.channels || {}, r.errors || '');
+        }
+      })
+      .catch(e => console.log('[BANNER] backfill error (harmless):', e.message));
+  }
   // Deliberate retry: the first pass can race with channel cache warming.
   setTimeout(() => {
     for (const g of c.guilds.cache.values()) runEnsure(g);
@@ -5083,6 +5096,19 @@ maintenance.init({
         try { await ensureApplyChannels(g); ensured++; } catch (e) { /* channel ensure is best-effort */ }
       }
       return { ok: true, result: `Channel ensure ran in ${ensured} guild(s).` };
+    },
+    're-banner-backfill': async () => {
+      // Clears the one-time flag, then re-runs. Use if the first attempt failed
+      // part-way (rate limited, channel ids not saved yet, missing permissions).
+      const s = settingsStore.loadSettings();
+      delete s.bannerBackfillAt;
+      settingsStore.saveSettings(s);
+      let total = 0, detail = [];
+      for (const g of client.guilds.cache.values()) {
+        const r = await backfillBanner.run(g, client.user.id);
+        if (r.ran) { total += r.edited; detail.push(`${g.name}: ${r.edited}`); }
+      }
+      return { ok: true, result: `Banner backfill edited ${total} message(s). ${detail.join(', ')}` };
     },
     'revalidate-matches': async () => {
       const repaired = manager.validateAllMatches();
