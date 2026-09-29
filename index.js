@@ -1137,6 +1137,18 @@ async function continueToRoomDetails(interaction, size, mode, style) {
   // invalidates that interaction's token, so showModal() failed and Discord
   // showed the player a bare "This interaction failed" with nothing to click and
   // no way to retry.
+  // The picker's id is read here, before clearDraft() can drop it -- clearDraft
+  // also forgets the tracked id, so reading it afterwards returned null and the
+  // "Host a Match" box was never deleted.
+  //
+  // It is stored on the match rather than deleted straight away, because the form
+  // has not been filled in yet. Deleting on submit means a host who closes the
+  // form without submitting still has a menu to come back to; deleting on open
+  // would leave them stuck behind "you already have a pending match" until the
+  // 60s config timeout reaped it.
+  const pickerMsg = await fetchMessage(interaction.channel, playFlow.takePickerMessageId(userId));
+  if (pickerMsg) match.pickerMessageId = pickerMsg.id;
+
   let modalOpen = false;
   try {
     await interaction.showModal(playFlow.buildRoomModal(match));
@@ -1146,13 +1158,10 @@ async function continueToRoomDetails(interaction, size, mode, style) {
     errLog('playFlow showModal failed for match ' + match.id, e);
   }
 
-  // The interaction is now spent, so the picker can be removed safely. It is a
-  // normal channel message tracked by id, which is why no interaction token is
-  // needed here at all.
-  const pickerMsg = await fetchMessage(interaction.channel, playFlow.takePickerMessageId(userId));
-  if (pickerMsg) await pickerMsg.delete().catch(() => null);
-
-  if (modalOpen) return;
+  if (modalOpen) {
+    manager.persistMatches();
+    return;
+  }
 
   // The form could not be opened. Leave a message with a button so the player can
   // retry from a fresh interaction rather than being stuck at a dead end.
@@ -1165,6 +1174,9 @@ async function continueToRoomDetails(interaction, size, mode, style) {
     // lobby embed. So this message is both saved and replaceable.
     match.setupMessageId = setupMsg.id;
     match.message = setupMsg.id;
+    // The picker is now redundant: the setup message carries the retry button.
+    if (pickerMsg) await pickerMsg.delete().catch(() => null);
+    match.pickerMessageId = null;
   }
   manager.persistMatches();
 
@@ -3618,6 +3630,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const channel = interaction.guild.channels.cache.get(match.channelId);
       console.log('[MODAL] apostado channel found:', !!channel);
       if (!channel) throw new Error('match channel is not cached');
+
+      // The "Host a Match" box goes now that the form is filled in -- this is the
+      // moment the host is done with it. It was kept alive while the form was open
+      // so closing the form without submitting left them a way back in.
+      const pickerMsg = await fetchMessage(channel, match.pickerMessageId);
+      if (pickerMsg) await pickerMsg.delete().catch(() => {});
+      match.pickerMessageId = null;
+
       // match.message is null for a match whose setup message was never posted,
       // which is the normal path since the form is opened directly. fetchMessage
       // returns null for that rather than handing back the last 50 messages.
