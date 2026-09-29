@@ -119,6 +119,8 @@ function ensureLogsFile() {
   if (!fs.existsSync(LOGS_FILE)) fs.writeFileSync(LOGS_FILE, JSON.stringify([]));
 }
 
+const MAX_MATCH_LOGS = 2000;
+
 function logMatch(entry) {
   ensureLogsFile();
   let logs = [];
@@ -129,6 +131,11 @@ function logMatch(entry) {
     logs = [];
   }
   logs.push(entry);
+  // This used to grow without limit, and every entry re-read, re-parsed and
+  // re-serialised the whole file synchronously -- so the cost of finishing a
+  // match kept climbing forever. Capped to match how maintenance.js handles
+  // its own log.
+  if (logs.length > MAX_MATCH_LOGS) logs = logs.slice(-MAX_MATCH_LOGS);
   fs.writeFileSync(LOGS_FILE, JSON.stringify(logs, null, 2));
 }
 
@@ -288,6 +295,12 @@ function persistMatches() {
   }
 }
 
+// Bumps the activity clock used by the abandoned-match reaper in
+// cleanupExpired(). Call this whenever a match genuinely changes hands.
+function touchMatch(match) {
+  if (match) match.lastActivityAt = Date.now();
+}
+
 loadMatches();
 
 function createMatch(creatorId, teamSize, channelId, mode = 'amo') {
@@ -302,6 +315,7 @@ function createMatch(creatorId, teamSize, channelId, mode = 'amo') {
     channelId2: null,
     matchChannelId: null,
     createdAt: Date.now(),
+    lastActivityAt: Date.now(),
     team1: [],
     team2: [],
     roomId: null,
@@ -321,6 +335,19 @@ function createMatch(creatorId, teamSize, channelId, mode = 'amo') {
   return match;
 }
 
+// A live match legitimately runs for a long time (a Free Fire round plus setup),
+// so this must stay generous. It exists only to reap matches abandoned because
+// nobody ever settled or cancelled them -- not to interrupt a real game.
+const ABANDONED_FULL_AGE = 4 * 60 * 60 * 1000;
+
+function isStructurallyBroken(match) {
+  // Marked full but never actually given the channels it needs. This is the
+  // state a failed channel creation used to leave behind permanently.
+  return match.status === 'full' &&
+    (!Array.isArray(match.voiceChannels) || match.voiceChannels.length === 0) &&
+    !match.channelId2;
+}
+
 function cleanupExpired() {
   const MAX_AGE = 10 * 60 * 1000;
   const now = Date.now();
@@ -328,6 +355,21 @@ function cleanupExpired() {
   let changed = false;
   for (const [id, match] of activeMatches) {
     if (match.status === 'waiting' && now - match.createdAt > MAX_AGE) {
+      activeMatches.delete(id);
+      changed = true;
+      continue;
+    }
+    // Roll a half-created match back to an open lobby so players can use it,
+    // rather than leaving it permanently "full" but unplayable.
+    if (isStructurallyBroken(match)) {
+      match.status = 'waiting';
+      match.phase = null;
+      match.resultStatus = '🔄 Match channels failed to create — the lobby has been reopened. Try joining again.';
+      changed = true;
+      continue;
+    }
+    const lastTouch = match.lastActivityAt || match.createdAt;
+    if (match.status === 'full' && now - lastTouch > ABANDONED_FULL_AGE) {
       activeMatches.delete(id);
       changed = true;
     }
@@ -389,6 +431,7 @@ function joinTeam(matchId, userId, team) {
   }
 
   currentTeam.push(userId);
+  touchMatch(match);
   persistMatches();
   return { success: true, team1: match.team1, team2: match.team2 };
 }
@@ -406,11 +449,13 @@ function leaveMatch(matchId, userId, opts = {}) {
 
   if (idx1 !== -1) {
     match.team1.splice(idx1, 1);
+    touchMatch(match);
     persistMatches();
     return { success: true, team1: match.team1, team2: match.team2 };
   }
   if (idx2 !== -1) {
     match.team2.splice(idx2, 1);
+    touchMatch(match);
     persistMatches();
     return { success: true, team1: match.team1, team2: match.team2 };
   }
@@ -675,14 +720,6 @@ async function createChannel(guild, match) {
   return channel;
 }
 
-async function updateChannelInfo(guild, match) {
-  const channel = guild.channels.cache.get(match.channelId2);
-  if (!channel) return null;
-  const roomInfo = `**🎮 Match: ${match.teamSize}v${match.teamSize}\n🏠 Room ID:** \`${match.roomId}\`\n**🔑 Password:** \`${match.password}\``;
-  await channel.messages.fetch({ limit: 50 }).catch(() => {});
-  return roomInfo;
-}
-
 async function deleteChannel(guild, match) {
   const channel = guild.channels.cache.get(match.channelId2);
   if (channel) {
@@ -875,7 +912,15 @@ async function finishMatch(guild, match) {
   match.closing = true;
   match.phase = 'FINISHING';
   persistMatches();
-  const restored = await returnPlayersToOriginal(guild, match);
+  // Guarded so a failure here cannot skip the channel cleanup below and leave
+  // orphaned voice channels in the server. cancelMatch already guarded the
+  // same call; this teardown path did not.
+  let restored = { total: 0, restored: 0, skipped: 0, stuck: [] };
+  try {
+    restored = await returnPlayersToOriginal(guild, match);
+  } catch (e) {
+    console.log(`[VOICE] match ${match.id}: restore failed during finish: ${e.message}`);
+  }
   await verifyRestore(guild, match).catch(() => {});
   await deleteVoiceChannels(guild, match);
   await deleteChannel(guild, match);
@@ -993,6 +1038,7 @@ function getVoicePoolSize() { return VOICE_POOL_SIZE; }
 module.exports = {
   createMatch,
   persistMatches,
+  touchMatch,
   getMatch,
   getMatchByChannel,
   getMatchByCreator,
@@ -1002,7 +1048,6 @@ module.exports = {
   isTeamsFull,
   createVoiceChannels,
   createChannel,
-  updateChannelInfo,
   deleteChannel,
   archiveChannel,
   movePlayersToVoice,

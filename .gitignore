@@ -25,4 +25,5 @@ send_help.js
 send_announce.js
 verify-storage.js
 verify-invites.js
+verify-matches.js
 .env

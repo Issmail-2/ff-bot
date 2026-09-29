@@ -170,9 +170,19 @@ function errLog(...args) {
   console.error(line);
   try {
     const fs = require('fs');
-    const dir = require('path').join(__dirname, 'data');
+    const path = require('path');
+    const dir = path.join(__dirname, 'data');
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(require('path').join(dir, 'error.log'), line + '\n');
+    const logPath = path.join(dir, 'error.log');
+    // error.log is appended to on every uncaught error and each entry carries a
+    // stack trace, so on a noisy bot it grew until the disk filled. Rotate it
+    // once it gets large and keep exactly one previous copy.
+    try {
+      if (fs.existsSync(logPath) && fs.statSync(logPath).size > 2 * 1024 * 1024) {
+        fs.renameSync(logPath, logPath + '.1');
+      }
+    } catch (e) { /* ignore */ }
+    fs.appendFileSync(logPath, line + '\n');
   } catch { /* ignore */ }
   try {
     maintenance.record('internal', new Error(msg.slice(0, 1800)), { source: 'errlog' });
@@ -1245,10 +1255,46 @@ async function updateResultBox(guild, match) {
 async function startFullMatch(guild, match) {
   if (match.status === 'full') return null;
   match.status = 'full';
+  manager.touchMatch(match);
   manager.persistMatches();
 
-  const { team1Channel, team2Channel } = await manager.createVoiceChannels(guild, match);
-  const roomChannel = await manager.createChannel(guild, match);
+  // Channel creation can fail (rate limits, missing Manage Channels, deleted
+  // category). These calls were previously unguarded, so a throw left the match
+  // stuck at status 'full' with no voice channels and no room channel --
+  // and nothing ever cleans that up, because cleanupExpired only reaps
+  // 'waiting' matches. Roll back to 'waiting' so the lobby stays usable.
+  let team1Channel = null;
+  let team2Channel = null;
+  let roomChannel = null;
+  try {
+    ({ team1Channel, team2Channel } = await manager.createVoiceChannels(guild, match));
+    roomChannel = await manager.createChannel(guild, match);
+  } catch (e) {
+    console.error(`[MATCH] match ${match.id} failed to create channels:`, e.message);
+    errLog('startFullMatch channel creation failed:', e);
+    try {
+      // Best-effort cleanup so a half-created pair is not left behind.
+      if (team1Channel) await team1Channel.delete().catch(() => {});
+      if (team2Channel) await team2Channel.delete().catch(() => {});
+      if (roomChannel) await roomChannel.delete().catch(() => {});
+    } catch (e2) { /* ignore */ }
+    match.voiceChannels = [];
+    match.channelId2 = null;
+    match.voice1Id = null;
+    match.voice2Id = null;
+    match.status = 'waiting';
+    manager.persistMatches();
+    const ch = guild.channels.cache.get(match.channelId);
+    if (ch && match.message) {
+      const msg = await ch.messages.fetch(match.message).catch(() => null);
+      if (msg) {
+        await msg.edit({ embeds: [buildMatchBoxEmbed(guild, match, null)], components: buildMatchButtons(guild, match, client.user.id)[0] }).catch(() => {});
+      }
+    }
+    await syncJoinButtons(guild, match);
+    return null;
+  }
+
   await manager.movePlayersToVoice(guild, match, team1Channel, team2Channel);
 
   const apostado = guild.channels.cache.get(match.channelId);
@@ -2524,6 +2570,7 @@ client.once(Events.ClientReady, async (c) => {
   for (const g of c.guilds.cache.values()) {
     runEnsure(g);
   }
+  // Deliberate retry: the first pass can race with channel cache warming.
   setTimeout(() => {
     for (const g of c.guilds.cache.values()) runEnsure(g);
   }, 45000);
@@ -2537,15 +2584,20 @@ client.once(Events.ClientReady, async (c) => {
   if (selfHealed.length) {
     console.log(`[SELF-HEAL] startup sweep repaired ${selfHealed.length} match(es):`, selfHealed);
   }
-  for (const g of c.guilds.cache.values()) {
-    const restored = manager.getAllMatches();
-    for (const rm of restored) {
-      if (rm.status === 'waiting' && !rm.joinTimeout) {
-        rm.configTimeout = rm.configTimeout || null;
-        rm.joinTimeout = setTimeout(() => timeoutMatch(g, rm.id), 2 * 60 * 1000);
-        console.log(`[RESTORE] re-armed join timeout for ${rm.id}`);
-      }
+  // getAllMatches() is not guild-scoped, so hoisting it out of the guild loop
+  // avoids rescanning every match once per guild -- and stops a match from one
+  // guild getting a timeout closure that points at a different guild.
+  const liveMatches = manager.getAllMatches();
+  for (const rm of liveMatches) {
+    if (rm.status === 'waiting' && !rm.joinTimeout) {
+      rm.configTimeout = rm.configTimeout || null;
+      const g = c.guilds.cache.get(rm.guildId) || c.guilds.cache.first();
+      if (!g) continue;
+      rm.joinTimeout = setTimeout(() => timeoutMatch(g, rm.id), 2 * 60 * 1000);
+      console.log(`[RESTORE] re-armed join timeout for ${rm.id}`);
     }
+  }
+  for (const g of c.guilds.cache.values()) {
     syncStoreEmbed(g).catch(e => console.log('[STORE] ready sync failed:', e.message));
     refreshCombinedLeaderboard(g);
   }
@@ -2698,7 +2750,15 @@ client.on(Events.MessageCreate, async (message) => {
     for (let i = 0; match.team2.length < match.teamSize; i++) match.team2.push(`mockT2_${i}`);
     manager.persistMatches();
     try {
-      await startFullMatch(message.guild, match);
+      const started = await startFullMatch(message.guild, match);
+      if (!started) {
+        const failEmbed = new EmbedBuilder()
+          .setTitle('❌ FORCE-FULL FAILED')
+          .setColor(COLORS.danger)
+          .setDescription(`Could not create the match channels, so the match was left open for players to join.\n\nCheck that I can **Manage Channels** and that the room category still exists.`)
+          .setFooter({ text: BRANDING });
+        return message.reply({ embeds: [failEmbed] });
+      }
       const doneEmbed = new EmbedBuilder()
         .setTitle('✅ FORCE-FULL COMPLETE')
         .setColor(COLORS.success)
@@ -2828,6 +2888,7 @@ async function settleMatchResult(guild, match) {
   }
   match.settled = true;
   match.settledAt = Date.now();
+  manager.touchMatch(match);
   manager.persistMatches();
 
   const winIds = winnerTeam === 1 ? match.team1 : match.team2;
@@ -2930,7 +2991,12 @@ async function performJoin(interaction, match, team) {
 
   if (manager.isTeamsFull(match.id)) {
     try {
-      await startFullMatch(interaction.guild, match);
+      const started = await startFullMatch(interaction.guild, match);
+      if (!started) {
+        await interaction.channel.send({
+          content: `❌ I could not create the match voice channels, so the match was **not** started and the lobby is still open. Check that I have **Manage Channels**.`
+        }).catch(() => {});
+      }
     } catch (e) {
       console.error('Error starting match:', e);
       await interaction.channel.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(() => {});
@@ -3148,6 +3214,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const teamOf = id => match.team1.includes(id) ? 1 : 2;
     match[votesKey][voterId] = { team: teamOf(selected), player: selected };
+    manager.touchMatch(match);
     manager.persistMatches();
     await syncVotePanel(interaction.guild, match);
 

@@ -12,6 +12,7 @@ const INCIDENT_WINDOW = 60 * 1000;
 const SAME_SNIPPET_THRESHOLD = 3;
 const MAX_INCIDENTS = 100;
 const MAX_LOG_ENTRIES = 2000;
+const MAX_BACKUPS = 12;
 const DEDUPE_MS = 30 * 1000;
 
 const state = {
@@ -162,6 +163,33 @@ function persistApprovals() {
   writeJson(APPROVALS_FILE, state.approvals);
 }
 
+function pruneBackups(keep = MAX_BACKUPS) {
+  // Backups are a full copy of the data dir and were never pruned, so a
+  // recurring auto-fix could create dozens per hour until the disk filled.
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) return 0;
+    const dirs = fs.readdirSync(BACKUP_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => {
+        let mtime = 0;
+        try { mtime = fs.statSync(path.join(BACKUP_DIR, d.name)).mtimeMs; } catch (e) { /* ignore */ }
+        return { name: d.name, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    let removed = 0;
+    for (const d of dirs.slice(keep)) {
+      try {
+        fs.rmSync(path.join(BACKUP_DIR, d.name), { recursive: true, force: true });
+        removed++;
+      } catch (e) { /* ignore */ }
+    }
+    if (removed > 0) console.log(`[MAINT] pruned ${removed} old backup(s), kept ${Math.min(keep, dirs.length)}`);
+    return removed;
+  } catch (e) {
+    return 0;
+  }
+}
+
 function backupNow(explain) {
   try {
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -176,6 +204,7 @@ function backupNow(explain) {
       fs.copyFileSync(src, path.join(dest, f));
       copied++;
     }
+    pruneBackups();
     logEntry({
       ts: stamp(), level: 'info', component: 'maintenance', severity: 'low',
       type: 'backup', problem: 'Scheduled/safety backup.', cause: null, affectedSystem: 'Data files',
@@ -504,6 +533,7 @@ module.exports = {
   record,
   recordEvent,
   backupNow,
+  pruneBackups,
   getStatus,
   getLog,
   approvalsList,
