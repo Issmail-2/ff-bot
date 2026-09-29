@@ -20,11 +20,17 @@ const CUSTOM_ID = 'play_setup';
 // enough - but it is swept so a user who abandons the flow cannot leave an
 // entry behind forever.
 const drafts = new Map();
+// Ids of the picker messages we posted, so the channel cleanup can remove a
+// stale one instead of leaving abandoned menus in the match channel.
+const pickMessageIds = new Map();
 
 function sweep() {
   const now = Date.now();
   for (const [userId, d] of drafts) {
-    if (now - (d.createdAt || 0) > EXPIRY_MS) drafts.delete(userId);
+    if (now - (d.createdAt || 0) > EXPIRY_MS) {
+      drafts.delete(userId);
+      pickMessageIds.delete(userId);
+    }
   }
 }
 
@@ -157,6 +163,7 @@ function getDraft(userId) {
 }
 
 function clearDraft(userId) {
+  pickMessageIds.delete(userId);
   return drafts.delete(userId);
 }
 
@@ -170,6 +177,7 @@ module.exports = {
   EXPIRY_MS,
   CUSTOM_ID,
   drafts,
+  pickMessageIds,
   sweep,
   sizeLabel,
   buildSizePicker,

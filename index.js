@@ -395,7 +395,8 @@ The **#1 ranked player** automatically receives the Role #1 role.
 ━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
 \`/play\` — **host a match** (new!) pick 2v2/3v3/4v4 from a menu, then enter your room details
-\`!play 2v2 | 3v3 | 4v4\` — host a match (text command)
+\`!play\` — same thing: opens a menu to choose 2v2/3v3/4v4
+\`!play 2v2 | 3v3 | 4v4\` — host a match directly (old way, still works)
 \`!esport 2v2 | 3v3 | 4v4\` — host an esport match
 \`!leaderboard\` — show the top players
 \`!cancelmatch\` — cancel the match you opened (works in any channel)
@@ -983,12 +984,34 @@ async function handlePlaySizePick(interaction) {
     return interaction.reply({ content: '❌ Wrong channel for this match.', flags: 64 });
   }
 
+  // Re-check at pick time: the player may have left voice, joined another
+  // match, or been blacklisted between typing the command and choosing.
+  if (!isInRequiredVoice(interaction.member)) {
+    playFlow.clearDraft(userId);
+    return interaction.reply({ content: voiceCheckMessage(), flags: 64 });
+  }
+  const bl = blacklistModule.isBlacklisted(userId);
+  if (bl) {
+    playFlow.clearDraft(userId);
+    return interaction.reply({ content: blacklistMessage(bl), flags: 64 });
+  }
+  if (manager.getMatchByCreator(userId, mode)) {
+    playFlow.clearDraft(userId);
+    return interaction.reply({ content: '❌ You already have a pending match! Cancel it first.', flags: 64 });
+  }
+
   // Create the match first, so if the modal fails the player can still retry
   // from the setup message rather than losing their slot.
   const match = manager.createMatch(userId, size, channelId, mode);
 
   // The picker was transient navigation, so it is removed once chosen from.
-  await interaction.deleteReply().catch(() => {});
+  // For /play the picker is an ephemeral reply (deleteReply). For !play it is a
+  // normal channel message (delete the message itself).
+  if (interaction.message && interaction.message.id) {
+    await interaction.message.delete().catch(() => {});
+  } else {
+    await interaction.deleteReply().catch(() => {});
+  }
 
   const parts = playFlow.buildSetupMessageParts(match, userId, interaction.guild);
   const setupMsg = await interaction.channel.send(parts).catch(() => null);
@@ -2923,9 +2946,28 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     const args = content.split(/\s+/);
-    const teamSize = parseTeamSize(args[1]);
-    if (!teamSize) {
-      return message.reply(`❌ Please specify a team size: \`${modeCfg.command} 2v2\`, \`${modeCfg.command} 3v3\`, or \`${modeCfg.command} 4v4\`.`);
+    const typedSize = parseTeamSize(args[1]);
+
+    // Bare "!play" now opens the same team-size picker as /play instead of
+    // asking the player to remember the syntax. Typing "!play 3v3" still works.
+    if (!typedSize) {
+      if (!isInRequiredVoice(message.member)) {
+        return message.reply(voiceCheckMessage());
+      }
+      const bl0 = blacklistModule.isBlacklisted(message.author.id);
+      if (bl0) {
+        return message.reply(blacklistMessage(bl0));
+      }
+      playFlow.setDraft(message.author.id, { mode });
+      // Public, because the picker needs to persist for the host to click it
+      // after the message is sent (ephemeral replies cannot host follow-ups).
+      const picker = playFlow.buildSizePicker(message.author.id, message.guild);
+      const msg = await message.channel.send(picker).catch(() => null);
+      if (msg) {
+        // Remembered so the picker can be replaced/cleaned up later.
+        playFlow.pickMessageIds.set(message.author.id, msg.id);
+      }
+      return;
     }
 
     if (!isInRequiredVoice(message.member)) {
@@ -2937,11 +2979,13 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply(blacklistMessage(bl));
     }
 
-    const match = manager.createMatch(message.author.id, teamSize, message.channel.id, mode);
+    const match = manager.createMatch(message.author.id, typedSize, message.channel.id, mode);
 
-    const parts = buildSetupMessageParts(match, message.author.id);
+    const parts = playFlow.buildSetupMessageParts(match, message.author.id, message.guild);
     const msg = await message.reply({ embeds: parts.embeds, components: parts.components });
     match.message = msg.id;
+    match.setupMessageId = msg.id;
+    manager.persistMatches();
     return;
   }
 
@@ -3005,8 +3049,11 @@ async function cleanupOldMessages(channel) {
   try {
     const msgs = await channel.messages.fetch({ limit: 50 });
     const activeMsgs = manager.getAllMatches().map(mm => mm.message).filter(Boolean);
+    // Pickers that are still live must survive the sweep, or a host would have
+    // their menu deleted out from under them.
+    const livePickers = [...playFlow.pickMessageIds.values()];
     const toDelete = msgs.filter(m =>
-      (m.author.id === client.user.id && !activeMsgs.includes(m.id)) ||
+      (m.author.id === client.user.id && !activeMsgs.includes(m.id) && !livePickers.includes(m.id)) ||
       m.content.trim().toLowerCase().startsWith('!play')
     );
     if (toDelete.size > 0) {
