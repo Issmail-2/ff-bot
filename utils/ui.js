@@ -107,6 +107,39 @@ function createEmbed(color) {
     .setTimestamp();
 }
 
+// Fetches a single message by id, or returns null.
+//
+// This exists because channel.messages.fetch(id) is not safe to call with a
+// missing id: with no id it returns the last 50 messages as a Collection rather
+// than throwing or returning null. Collection extends Map, so a caller that then
+// calls .delete() on the "message" gets Map.delete(), which returns a boolean --
+// and the .catch() chained onto it throws
+//
+//   oldMsg.delete(...).catch is not a function
+//
+// which surfaced to players as a match that could not be created.
+//
+// A missing or malformed id is therefore rejected before the call, and the
+// result is checked to be an actual message before handing it back. Every
+// "fetch a message we recorded earlier" in the bot goes through here, because
+// every one of those ids can be null for a match that never got that far.
+function fetchMessage(channel, id) {
+  if (!channel || typeof channel.messages?.fetch !== 'function') return Promise.resolve(null);
+  // Strings only, deliberately. Discord ids exceed Number.MAX_SAFE_INTEGER, so
+  // Number('1234567890123456789') silently becomes 1234567890123456800 and
+  // stringifying that back would fetch the wrong message. Every id in this bot
+  // comes straight from the API as a string; a number here means it was already
+  // mangled somewhere upstream and is not safe to use.
+  if (typeof id !== 'string') return Promise.resolve(null);
+  const key = id.trim();
+  // A snowflake is 17-20 digits. Anything else is a missing id, not a message.
+  if (!/^\d{17,20}$/.test(key)) return Promise.resolve(null);
+  return Promise.resolve()
+    .then(() => channel.messages.fetch(key))
+    .then(msg => (msg && typeof msg.edit === 'function' ? msg : null))
+    .catch(() => null);
+}
+
 // Convenience so embeds do not each have to remember to attach the server icon.
 function withThumbnail(embed, guild) {
   try {
@@ -137,6 +170,6 @@ function withBanner(embed, guild) {
 }
 
 module.exports = {
-  COLORS, BRANDING, STICKERS, normalizeEmoji,
+  COLORS, BRANDING, STICKERS, normalizeEmoji, fetchMessage,
   progressBar, slotStrip, divider, createEmbed, withThumbnail, withBanner
 };

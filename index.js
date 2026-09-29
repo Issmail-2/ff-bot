@@ -106,7 +106,7 @@ const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const backfillBanner = require('./utils/backfillBanner');
 const cheaterReports = require('./utils/cheaterReports');
-const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail, withBanner } = require('./utils/ui');
+const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail, withBanner, fetchMessage } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
 const inviteTracker = require('./utils/invites');
 const slash = require('./utils/slash');
@@ -908,7 +908,7 @@ async function updateMatchChannel(guild, match) {
     .setFooter({ text: BRANDING }), guild);
   let infoMsg = null;
   if (match.roomInfoMessageId) {
-    infoMsg = await channel.messages.fetch(match.roomInfoMessageId).catch(() => null);
+    infoMsg = await fetchMessage(channel, match.roomInfoMessageId);
   }
   if (infoMsg) {
     await infoMsg.edit({ embeds: [embed] }).catch(() => {});
@@ -948,7 +948,7 @@ async function cancelMatch(guild, match, cancelText) {
   if (match.configTimeout) { clearTimeout(match.configTimeout); match.configTimeout = null; }
   const baseChannel = guild.channels.cache.get(match.channelId);
   if (baseChannel && match.message) {
-    const msg = await baseChannel.messages.fetch(match.message).catch(() => null);
+    const msg = await fetchMessage(baseChannel, match.message);
     if (msg) await msg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
   }
   await clearJoinButtons(guild, match);
@@ -956,11 +956,11 @@ async function cancelMatch(guild, match, cancelText) {
   const roomChannel = guild.channels.cache.get(match.channelId2);
   if (roomChannel) {
     if (match.resultMessageId && match.resultMessageId !== match.message) {
-      const rmsg = await roomChannel.messages.fetch(match.resultMessageId).catch(() => null);
+      const rmsg = await fetchMessage(roomChannel, match.resultMessageId);
       if (rmsg) await rmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
     }
     if (match.cancelMsgId && match.cancelMsgId !== match.resultMessageId) {
-      const cmsg = await roomChannel.messages.fetch(match.cancelMsgId).catch(() => null);
+      const cmsg = await fetchMessage(roomChannel, match.cancelMsgId);
       if (cmsg) await cmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
     }
   }
@@ -1149,12 +1149,8 @@ async function continueToRoomDetails(interaction, size, mode, style) {
   // The interaction is now spent, so the picker can be removed safely. It is a
   // normal channel message tracked by id, which is why no interaction token is
   // needed here at all.
-  const pickerId = playFlow.takePickerMessageId(userId);
-  if (pickerId) {
-    await interaction.channel.messages.fetch(pickerId)
-      .then(m => m.delete())
-      .catch(() => null);
-  }
+  const pickerMsg = await fetchMessage(interaction.channel, playFlow.takePickerMessageId(userId));
+  if (pickerMsg) await pickerMsg.delete().catch(() => null);
 
   if (modalOpen) return;
 
@@ -1224,7 +1220,7 @@ async function openCancelVote(guild, match, interaction) {
   );
   let msg = null;
   if (match.cancelMsgId) {
-    const existing = await roomChannel.messages.fetch(match.cancelMsgId).catch(() => null);
+    const existing = await fetchMessage(roomChannel, match.cancelMsgId);
     if (existing) msg = existing;
   }
   if (msg) {
@@ -1512,7 +1508,7 @@ async function syncVotePanel(guild, match) {
   if (!room) return;
   const embed = buildVotePanelEmbed(match);
   if (match.votePanelMessageId) {
-    const msg = await room.messages.fetch(match.votePanelMessageId).catch(() => null);
+    const msg = await fetchMessage(room, match.votePanelMessageId);
     if (msg) {
       await msg.edit({ embeds: [embed] }).catch(() => {});
       return;
@@ -1528,7 +1524,7 @@ async function syncVotePanel(guild, match) {
 async function clearVotePanel(guild, match) {
   const room = guild.channels.cache.get(match.channelId2);
   if (room && match.votePanelMessageId) {
-    const msg = await room.messages.fetch(match.votePanelMessageId).catch(() => null);
+    const msg = await fetchMessage(room, match.votePanelMessageId);
     if (msg) await msg.delete().catch(() => {});
   }
   match.votePanelMessageId = null;
@@ -1608,7 +1604,7 @@ function resultColor(match) {
 async function updateResultBox(guild, match) {
   const roomChannel = guild.channels.cache.get(match.channelId2);
   if (!roomChannel || !match.resultMessageId) return;
-  const msg = await roomChannel.messages.fetch(match.resultMessageId).catch(() => null);
+  const msg = await fetchMessage(roomChannel, match.resultMessageId);
   if (!msg) return;
   await msg.edit({ embeds: [buildMainMatchEmbed(match, guild)], components: buildMatchMenu(match) }).catch(() => {});
 }
@@ -1694,7 +1690,7 @@ async function startFullMatch(guild, match) {
     manager.persistMatches();
     const ch = guild.channels.cache.get(match.channelId);
     if (ch && match.message) {
-      const msg = await ch.messages.fetch(match.message).catch(() => null);
+      const msg = await fetchMessage(ch, match.message);
       if (msg) {
         // Pass both rows through, not just the first: the join buttons and the
         // leave/cancel actions live on separate rows now.
@@ -1712,7 +1708,7 @@ async function startFullMatch(guild, match) {
 
   const apostado = guild.channels.cache.get(match.channelId);
   if (apostado) {
-    const msg2 = await apostado.messages.fetch(match.message).catch(() => null);
+    const msg2 = await fetchMessage(apostado, match.message);
     if (msg2) {
       await msg2.edit({
         embeds: [buildMatchBoxEmbed(guild, match, null)],
@@ -1823,7 +1819,7 @@ async function syncJoinButtons(guild, match) {
   const components = buildMatchButtons(match, client.user.id);
   let btnMsg = null;
   if (match.buttonsMessageId) {
-    btnMsg = await channel.messages.fetch(match.buttonsMessageId).catch(() => null);
+    btnMsg = await fetchMessage(channel, match.buttonsMessageId);
   }
   if (btnMsg) {
     await btnMsg.edit({ embeds: [], components }).catch(() => {});
@@ -1840,7 +1836,7 @@ async function syncJoinButtons(guild, match) {
 async function clearJoinButtons(guild, match, fallbackContent) {
   const channel = guild.channels.cache.get(match.channelId);
   if (!channel || !match.buttonsMessageId) return;
-  const btnMsg = await channel.messages.fetch(match.buttonsMessageId).catch(() => null);
+  const btnMsg = await fetchMessage(channel, match.buttonsMessageId);
   if (btnMsg) {
     if (fallbackContent) {
       await btnMsg.edit({ content: fallbackContent, embeds: [], components: [] }).catch(() => {});
@@ -2006,7 +2002,7 @@ async function syncCombinedLeaderboard(guild) {
     const payload = { embeds: [embed] };
 
     if (liveLeaderboardMsgId) {
-      const existing = await channel.messages.fetch(liveLeaderboardMsgId).catch(() => null);
+      const existing = await fetchMessage(channel, liveLeaderboardMsgId);
       if (existing) {
         await existing.edit(payload).catch(() => { liveLeaderboardMsgId = null; });
         if (liveLeaderboardMsgId) {
@@ -2277,7 +2273,7 @@ async function renderReportMessage(guild, report) {
   const S = settingsStore.loadSettings();
   const ch = guild.channels.cache.get(report.channelId || S.checkChannelId);
   if (!ch) return;
-  const msg = await ch.messages.fetch(report.messageId).catch(() => null);
+  const msg = await fetchMessage(ch, report.messageId);
   if (!msg) return;
   const final = ['clean', 'marked', 'cancelled'].includes(report.status);
   const content = report.status === 'marked' && report.checkedBy ? `⛔ Confirmed as cheater by <@${report.checkedBy}>` : '';
@@ -2866,7 +2862,7 @@ async function handleApplyStaffButton(interaction) {
 async function renderApplyMessage(guild, app) {
   const ch = guild.channels.cache.get(app.channelId || settingsStore.loadSettings().applyQueueChannelId);
   if (!ch) return;
-  const msg = await ch.messages.fetch(app.messageId).catch(() => null);
+  const msg = await fetchMessage(ch, app.messageId);
   if (!msg) return;
   await msg.edit({
     embeds: [buildApplyEmbed(guild, app)],
@@ -3442,7 +3438,7 @@ async function settleMatchResult(guild, match) {
 
   const channel = guild.channels.cache.get(match.channelId2);
   if (channel && match.resultMessageId) {
-    const msg = await channel.messages.fetch(match.resultMessageId).catch(() => null);
+    const msg = await fetchMessage(channel, match.resultMessageId);
     if (msg) {
       const resultEmbed = new EmbedBuilder()
         .setTitle('✅ Match Finished!')
@@ -3466,7 +3462,7 @@ async function timeoutMatch(guild, matchId, phase = 'lobby') {
   if (!match || match.status !== 'waiting') return;
   const channel = guild.channels.cache.get(match.channelId);
   if (channel) {
-    const msg = await channel.messages.fetch(match.message).catch(() => null);
+    const msg = await fetchMessage(channel, match.message);
     if (msg) await msg.delete().catch(() => {});
   }
   await clearJoinButtons(guild, match);
@@ -3494,7 +3490,7 @@ async function performJoin(interaction, match, team) {
     match.joinTimeout = null;
   }
 
-  const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
+  const msg = await fetchMessage(interaction.channel, match.message);
   if (msg) {
     await msg.edit({ embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)] });
   }
@@ -3621,7 +3617,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const channel = interaction.guild.channels.cache.get(match.channelId);
       console.log('[MODAL] apostado channel found:', !!channel);
-      const oldMsg = await channel.messages.fetch(match.message).catch(() => null);
+      if (!channel) throw new Error('match channel is not cached');
+      // match.message is null for a match whose setup message was never posted,
+      // which is the normal path since the form is opened directly. fetchMessage
+      // returns null for that rather than handing back the last 50 messages.
+      const oldMsg = await fetchMessage(channel, match.message);
       if (oldMsg) await oldMsg.delete().catch(() => {});
 
       const newMsg = await channel.send({ embeds: [matchEmbed] });
@@ -3993,7 +3993,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         manager.clearOriginalChannel(match, interaction.user.id);
 
-        const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
+        const msg = await fetchMessage(interaction.channel, match.message);
         if (msg) {
           await msg.edit({ embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)] });
         }
@@ -4018,7 +4018,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       manager.endRestoreUser(match, interaction.user.id);
 
-      const msg = await interaction.channel.messages.fetch(match.message).catch(() => null);
+      const msg = await fetchMessage(interaction.channel, match.message);
       if (msg) {
         await msg.edit({ embeds: [buildMatchBoxEmbed(interaction.guild, match, interaction.user)] });
       }
@@ -4052,7 +4052,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const roomChannel = interaction.guild.channels.cache.get(match.channelId2) || interaction.channel;
 
       if (match.cancelMsgId && roomChannel) {
-        const cmsg = await roomChannel.messages.fetch(match.cancelMsgId).catch(() => null);
+        const cmsg = await fetchMessage(roomChannel, match.cancelMsgId);
         if (cmsg) await cmsg.edit({
           embeds: [buildCancelVoteEmbed(match)],
           components: [new ActionRowBuilder().addComponents(
