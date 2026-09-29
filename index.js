@@ -9,7 +9,7 @@ if (!config.modes.esport) config.modes.esport = { name:'esport', displayName:'e-
 // "PvP Yes" is a second custom-room queue, hosted in the second apostado channel.
 // It shares the amo point file but keeps its own lobby channel, and it is the
 // mode that asks which lobby style to use.
-if (!config.modes.ammo) config.modes.ammo = { name:'ammo', displayName:'amo-yes', command:'!playyes', matchChannelId: (config.modes.amo && config.modes.amo.ammoChannelId) || process.env.AMMO_CHANNEL_ID || '1547567219167199352', voiceCategoryId: config.modes.amo ? config.modes.amo.voiceCategoryId : undefined, logsCategoryId: config.modes.amo ? config.modes.amo.logsCategoryId : undefined, pointsFile:'./data/points.json', requiresStyle:true };
+if (!config.modes.ammo) config.modes.ammo = { name:'ammo', displayName:'amo-yes', command:'!playyes', matchChannelId: (config.modes.amo && config.modes.amo.matchChannelId) || process.env.AMO_CHANNEL_ID || '1545315593450954762', voiceCategoryId: config.modes.amo ? config.modes.amo.voiceCategoryId : undefined, logsCategoryId: config.modes.amo ? config.modes.amo.logsCategoryId : undefined, pointsFile:'./data/points.json', requiresStyle:true };
 if (!config.matchPoints) config.matchPoints = { winner: 80, loser: 30 };
 if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705>', team1:'<a:aHYPR_GREENDOTid:1545351146770796634>', team2:'<a:aredptid:1545350890989428829>' };
 
@@ -238,7 +238,8 @@ process.on('unhandledRejection', (r) => {
 
 function getModeByChannel(channelId) {
   if (config.modes.esport && config.modes.esport.matchChannelId === channelId) return 'esport';
-  if (config.modes.amo && (config.modes.amo.matchChannelId === channelId || config.modes.amo.ammoChannelId === channelId)) return 'amo';
+  if (config.modes.amo && config.modes.amo.matchChannelId === channelId) return 'amo';
+if (config.modes.ammo && config.modes.ammo.matchChannelId === channelId) return 'ammo';
   return 'amo';
 }
 
@@ -1000,11 +1001,12 @@ async function handlePlaySizePick(interaction) {
     playFlow.setDraft(userId, { mode });
     const parts = playFlow.buildSizePicker(userId, interaction.guild, { mode });
     await interaction.update(parts).catch(() => {});
-    const where = mode === 'esport'
-      ? `<#${modeCfg.matchChannelId}>`
-      : `<#${modeCfg.matchChannelId}> or <#${modeCfg.ammoChannelId}>`;
+    // Every mode is hosted in the same channel, so name that one channel rather
+    // than listing a per-mode pair. The old version read modeCfg.ammoChannelId,
+    // which amo-yes does not have, producing a literal "<#undefined>".
+    const where = modeCfg.matchChannelId ? `<#${modeCfg.matchChannelId}>` : 'the match channel';
     return interaction.followUp({
-      content: `✅ Mode set to **${modeCfg.displayName}**. Now pick a team size.\n⚠️ **${modeCfg.displayName}** matches must be hosted in ${where}.`,
+      content: `✅ Mode set to **${modeCfg.displayName}**. Now pick a team size.\n📍 All matches are hosted in ${where}.`,
       flags: 64
     }).catch(() => {});
   }
@@ -1017,9 +1019,14 @@ async function handlePlaySizePick(interaction) {
   const mode = draft.mode || 'amo';
   const modeCfg = getModeConfig(mode);
   const channelId = interaction.channel.id;
-  if (channelId !== modeCfg.matchChannelId && channelId !== modeCfg.ammoChannelId) {
+  // All three modes share one channel, so the gate is a single id. Checking the
+  // old ammoChannelId here compared against undefined and let anything through.
+  if (modeCfg.matchChannelId && channelId !== modeCfg.matchChannelId) {
     playFlow.clearDraft(userId);
-    return interaction.reply({ content: '❌ Wrong channel for this match.', flags: 64 });
+    return interaction.reply({
+      content: `❌ **${modeCfg.displayName}** matches must be started in <#${modeCfg.matchChannelId}>.`,
+      flags: 64
+    });
   }
 
   // Re-check at pick time: the player may have left voice, joined another
@@ -3008,10 +3015,11 @@ client.on(Events.MessageCreate, async (message) => {
       await ensureEsportChannels(message.guild);
     }
 
-    const matchChannelId = getModeConfig(mode).matchChannelId;
-    const ammoChannelId = getModeConfig(mode).ammoChannelId;
-    if (message.channel.id !== matchChannelId && message.channel.id !== ammoChannelId) {
-      return message.reply(`❌ Please use \`${modeCfg.command}\` in the ${modeCfg.displayName} channel <#${matchChannelId}> or <#${ammoChannelId}>.`);
+    // Every mode is hosted in the same channel, so there is one id to check and
+    // nothing to interpolate that could render as "<#undefined>".
+    const matchChannelId = modeCfg.matchChannelId;
+    if (matchChannelId && message.channel.id !== matchChannelId) {
+      return message.reply(`❌ Please use \`${modeCfg.command}\` in <#${matchChannelId}> to host a **${modeCfg.displayName}** match.`);
     }
 
     const existing = manager.getMatchByCreator(message.author.id, mode);
