@@ -1499,6 +1499,53 @@ async function updateResultBox(guild, match) {
   await msg.edit({ embeds: [buildMainMatchEmbed(match, guild)], components: buildMatchMenu(match) }).catch(() => {});
 }
 
+// The announcement posted once both teams are full.
+//
+// It replaces the lobby box as the last thing shown in the matches channel, so
+// it carries the final rosters rather than the join prompts. The banner image is
+// the server banner when there is one, falling back to the icon, and the Free
+// Fire logo sits in the title so the message is recognisable at a glance in a
+// busy channel.
+function buildFullMatchBanner(guild, match) {
+  const size = match.teamSize || 2;
+  const mode = match.mode || 'amo';
+  const t1 = teamPanel(match.team1, mode, size, guild);
+  const t2 = teamPanel(match.team2, mode, size, guild);
+  const strip = slotStrip(size, size, size);
+  const ts = Math.floor(Date.now() / 1000);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`${config.emojis.game} ALL TEAMS FULL • ${getModeConfig(mode).displayName} ${size}v${size}`)
+    .setColor(COLORS.gold)
+    .setDescription(
+      `${strip}  **${size * 2}/${size * 2}**\n` +
+      `**All players have joined.** The lobby is now locked — no one can join or leave.\n` +
+      `Moving everyone to their team voice channel <t:${ts}:R>.`
+    )
+    .addFields(
+      { name: `${config.emojis.team1} TEAM 1  \`${size}/${size}\``, value: t1, inline: true },
+      { name: `${config.emojis.team2} TEAM 2  \`${size}/${size}\``, value: t2, inline: true }
+    )
+    .addFields({
+      name: '📋 What happens now',
+      value: [
+        'Join the **team voice channel** for your side.',
+        `Host <@${match.creatorId}> starts the game in the custom room.`,
+        'When it ends, the **captains** of each team vote the MVP and points are awarded.'
+      ].join('\n'),
+      inline: false
+    })
+    .setFooter({ text: BRANDING });
+
+  // Server banner if it has one, otherwise the icon. Either way the message gets
+  // a wide image, which is what makes it read as an announcement.
+  try {
+    const banner = guild && guild.bannerURL ? guild.bannerURL({ size: 512 }) : null;
+    if (banner) return embed.setImage(banner);
+  } catch (e) { /* guild may be partial */ }
+  return withThumbnail(embed, guild);
+}
+
 async function startFullMatch(guild, match) {
   if (match.status === 'full') return null;
   match.status = 'full';
@@ -1561,12 +1608,9 @@ async function startFullMatch(guild, match) {
 
     await clearJoinButtons(guild, match);
 
-    const ts = Math.floor(Date.now() / 1000);
-    const readyEmbed = new EmbedBuilder()
-      .setTitle(`⚔️ MATCH READY • ${match.teamSize}v${match.teamSize}`)
-      .setColor(COLORS.success)
-      .setDescription(`**Teams are full** — moving players to the voice channels.\n<t:${ts}:f>`)
-      .setFooter({ text: BRANDING });
+    // The banner is the last thing posted in the matches channel, so it states
+    // plainly that everyone is in and the lobby is locked.
+    const readyEmbed = buildFullMatchBanner(guild, match);
     await apostado.send({ embeds: [readyEmbed] }).catch(() => {});
   }
 
@@ -1601,6 +1645,14 @@ async function startFullMatch(guild, match) {
 }
 
 function buildMatchButtons(match, userId) {
+  // A full match is locked: nobody joins, nobody leaves. startFullMatch() already
+  // strips the components off the lobby message, but any other caller reaching
+  // here would rebuild them, so the lock is enforced where the buttons are made
+  // rather than only where they are removed.
+  if (match.status === 'full' || match.status === 'done' || match.status === 'cancelled') {
+    return [];
+  }
+
   const n1 = match.team1 ? match.team1.length : 0;
   const n2 = match.team2 ? match.team2.length : 0;
   const size = match.teamSize || 2;
