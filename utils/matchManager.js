@@ -1,4 +1,5 @@
 const { ChannelType, PermissionsBitField } = require('discord.js');
+const { note } = require('./ui');
 const fs = require('fs');
 const path = require('path');
 let config;
@@ -723,7 +724,7 @@ async function createChannel(guild, match) {
 async function deleteChannel(guild, match) {
   const channel = guild.channels.cache.get(match.channelId2);
   if (channel) {
-    await channel.delete().catch(() => {});
+    await channel.delete().catch(e => note('delete', e));
   }
 }
 
@@ -753,9 +754,9 @@ async function archiveChannel(guild, match) {
     });
   }
 
-  await channel.setParent(category ? category.id : null, { lockPermissions: false }).catch(() => {});
-  await channel.setName(`match-${match.id.slice(-5)}`).catch(() => {});
-  await channel.permissionOverwrites.set(overwrites).catch(() => {});
+  await channel.setParent(category ? category.id : null, { lockPermissions: false }).catch(e => note('channel-setup', e));
+  await channel.setName(`match-${match.id.slice(-5)}`).catch(e => note('channel-setup', e));
+  await channel.permissionOverwrites.set(overwrites).catch(e => note('perms', e));
 }
 
 async function movePlayersToVoice(guild, match, team1Channel, team2Channel) {
@@ -921,7 +922,7 @@ async function finishMatch(guild, match) {
   } catch (e) {
     console.log(`[VOICE] match ${match.id}: restore failed during finish: ${e.message}`);
   }
-  await verifyRestore(guild, match).catch(() => {});
+  await verifyRestore(guild, match).catch(e => note('match-lifecycle', e));
   await deleteVoiceChannels(guild, match);
   await deleteChannel(guild, match);
   match.phase = 'FINISHED';
@@ -937,7 +938,7 @@ async function clearVoiceChannelMessages(guild, channelId) {
     const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
     if (!msgs || msgs.size === 0) return;
     await channel.bulkDelete(msgs, true).catch(async () => {
-      for (const m of msgs.values()) await m.delete().catch(() => {});
+      for (const m of msgs.values()) await m.delete().catch(e => note('bulk-delete', e));
     });
     console.log(`[VOICE] cleared ${msgs.size} leftover message(s) in team voice channel ${channelId}`);
   } catch (e) {

@@ -1,3 +1,4 @@
+const { note } = require('./ui');
 const fs = require('fs');
 const path = require('path');
 
@@ -350,7 +351,7 @@ function record(type, rawErr, ctx) {
 
     const autoFixed = !incident.needsApproval && incident.actionKey;
     if (autoFixed) {
-      runFix(incident.actionKey, incident, { risk: incident.risk }).catch(() => {});
+      runFix(incident.actionKey, incident, { risk: incident.risk }).catch(e => note('persist', e));
     } else if (incident.needsApproval) {
       createApproval(incident);
       incident.actionTaken = 'High-risk issue — approval requested.';
@@ -419,7 +420,7 @@ async function sweep() {
 
     for (const d of diag.slice(0, 5)) {
       if ((d.incident || {}).actionKey) {
-        runFix(d.incident.actionKey, d.incident, { risk: d.incident.risk }).catch(() => {});
+        runFix(d.incident.actionKey, d.incident, { risk: d.incident.risk }).catch(e => note('self-repair', e));
       }
     }
   } catch (e) {
@@ -492,7 +493,7 @@ function start(opts) {
   state.approvals = readJson(APPROVALS_FILE, []).filter(a => a && a.status === 'pending');
   if (!Array.isArray(state.approvals)) state.approvals = [];
 
-  const sweepInterval = setInterval(() => { sweep().catch(() => {}); }, 45000);
+  const sweepInterval = setInterval(() => { sweep().catch(e => note('maintenance', e)); }, 45000);
   if (sweepInterval.unref) sweepInterval.unref();
 
   logEntry({ ts: stamp(), level: 'info', component: 'maintenance', severity: 'low', type: 'startup', problem: null, cause: null, affectedSystem: 'maintenance', recommendedFix: null, risk: 'low', actionTaken: 'Maintenance assistant started.', result: 'ok', autoFixed: false, needsApproval: false });

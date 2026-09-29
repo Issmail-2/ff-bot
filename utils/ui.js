@@ -169,7 +169,48 @@ function withBanner(embed, guild) {
   return embed;
 }
 
+// Fire-and-forget that leaves a trace.
+//
+// The bot had 117 of `.catch(e => note('bg', e))`. Every one of them converted a failure
+// into silence, and five separate bugs went unnoticed for a commit or more
+// because of exactly that line: the bot would not boot, the style menu answered
+// "Unknown selection", the room form reported "This interaction failed", a match
+// failed to create, and a menu was never deleted. None of them appeared in a log
+// because the only thing between the error and the player was an empty callback.
+//
+// Returns null so it can be used in place of the original catch without changing
+// what the caller receives.
+//
+// Discord 404/403 on a message or channel is nearly always an expected race --
+// already deleted, already reaped, the cache is stale -- and logging those at
+// error level would bury the real failures. They are suppressed unless FF_DEBUG
+// is set, so a genuine 500 or a TypeError is the only thing that shouts.
+function note(context, e) {
+  try {
+    const code = e && (e.code !== undefined ? e.code : e.status);
+    // The Discord failures that are almost always an expected race rather than a
+    // bug: the message or channel is already gone, or we simply lack access to
+    // something we were tidying up.
+    //   10003 Unknown Message   10004 Unknown User
+    //   10007 Unknown Channel   10008 Unknown Channel (follow-up)
+    //   50013 Missing Permissions       403 / 404 as an HTTP status
+    const EXPECTED = [10003, 10004, 10007, 10008, 403, 404, 50013];
+    const expected = code !== undefined && EXPECTED.includes(Number(code));
+    const msg = (e && e.message) ? e.message : String(e);
+    const line = `[${context}] ${msg}`;
+    if (expected) {
+      if (process.env.FF_DEBUG) console.warn(line);
+    } else {
+      console.error(line);
+      // A few stack frames: for the failures that are not Discord's fault, the
+      // stack is the only thing that says which of 118 sites failed.
+      if (e && e.stack) console.error(e.stack.split('\n').slice(1, 4).join('\n'));
+    }
+  } catch { /* logging must never throw */ }
+  return null;
+}
+
 module.exports = {
-  COLORS, BRANDING, STICKERS, normalizeEmoji, fetchMessage,
+  COLORS, BRANDING, STICKERS, normalizeEmoji, fetchMessage, note,
   progressBar, slotStrip, divider, createEmbed, withThumbnail, withBanner
 };

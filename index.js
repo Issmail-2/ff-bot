@@ -106,7 +106,7 @@ const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const backfillBanner = require('./utils/backfillBanner');
 const cheaterReports = require('./utils/cheaterReports');
-const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail, withBanner, fetchMessage } = require('./utils/ui');
+const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail, withBanner, fetchMessage, note } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
 const inviteTracker = require('./utils/invites');
 const slash = require('./utils/slash');
@@ -346,7 +346,7 @@ async function applyJail(guild, member) {
   try { await role.setPermissions([]); } catch (e) { console.log('[JAIL] role perms:', e.message); }
 
   if (jail.category) {
-    await jail.category.permissionOverwrites.create(role.id, { allow: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
+    await jail.category.permissionOverwrites.create(role.id, { allow: [PermissionsBitField.Flags.ViewChannel] }).catch(e => note('perms', e));
   }
   const jailChannelIds = new Set([...JAIL_CHANNEL_IDS, jail.text.id, jail.voice.id].filter(Boolean));
   for (const ch of [jail.text, jail.voice]) {
@@ -354,11 +354,11 @@ async function applyJail(guild, member) {
     if (ch.type === ChannelType.GuildText) {
       await ch.permissionOverwrites.create(role.id, {
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
-      }).catch(() => {});
+      }).catch(e => note('perms', e));
     } else {
       await ch.permissionOverwrites.create(role.id, {
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect]
-      }).catch(() => {});
+      }).catch(e => note('perms', e));
     }
   }
 
@@ -369,7 +369,7 @@ async function applyJail(guild, member) {
     if (!channel.permissionOverwrites) continue;
     await channel.permissionOverwrites.create(role.id, { deny: [PermissionsBitField.Flags.ViewChannel] })
       .then(() => affected.push(channel.id))
-      .catch(() => {});
+      .catch(e => note('perms', e));
     await new Promise(r => setTimeout(r, 350));
   }
 
@@ -393,19 +393,19 @@ async function applyJail(guild, member) {
 }
 
 async function unjailMember(guild, member, role, affected, removedRoles) {
-  if (member && role) await member.roles.remove(role).catch(() => {});
+  if (member && role) await member.roles.remove(role).catch(e => note('role', e));
   if (member && removedRoles) {
     for (const rid of removedRoles) {
       const r = guild.roles.cache.get(rid);
       if (!r) continue;
-      await member.roles.add(r.id).catch(() => {});
+      await member.roles.add(r.id).catch(e => note('role', e));
     }
   };
   if (role) {
     for (const cid of (affected || [])) {
       const ch = guild.channels.cache.get(cid);
       if (ch && ch.permissionOverwrites) {
-        await ch.permissionOverwrites.delete(role.id).catch(() => {});
+        await ch.permissionOverwrites.delete(role.id).catch(e => note('perms', e));
       }
     }
   }
@@ -505,7 +505,7 @@ async function sendCommandsInfo(channel) {
     for (const m of mine.values()) {
       const same = m.embeds.length === embeds.length && embeds.every((e, i) => e.data.description === m.embeds[i].description);
       if (same) return null;
-      await m.delete().catch(() => {});
+      await m.delete().catch(e => note('delete', e));
     }
   }
   try {
@@ -561,7 +561,7 @@ async function stripRankNicknames(guild) {
       if (!member.nickname || !/^Rank\s+\d+\s+/i.test(member.nickname)) continue;
       const base = member.nickname.replace(/^Rank\s+\d+\s*/i, '');
       try {
-        await member.setNickname(base).catch(() => {});
+        await member.setNickname(base).catch(e => note('nickname', e));
         done++;
         await new Promise(r => setTimeout(r, 800));
       } catch (e) {
@@ -605,11 +605,11 @@ async function applyRankOneRole(guild, ranked, prefetchedMembers = null) {
   if (!members) return;
   for (const m of members.values()) {
     if (m.id === top) continue;
-    if (m.roles.cache.has(roleId)) await m.roles.remove(role).catch(() => {});
+    if (m.roles.cache.has(roleId)) await m.roles.remove(role).catch(e => note('role', e));
   }
   const topMember = members.get(top);
   if (topMember && !topMember.roles.cache.has(roleId)) {
-    await topMember.roles.add(role).catch(() => {});
+    await topMember.roles.add(role).catch(e => note('role', e));
     console.log(`[RANK1] rank #1 role assigned to ${top}`);
   }
 }
@@ -648,7 +648,7 @@ async function applyRankNicknames(guild) {
     rankRenameRunning = false;
     if (rankRenameQueued) {
       rankRenameQueued = false;
-      setTimeout(() => applyRankNicknames(guild).catch(() => {}), 250);
+      setTimeout(() => applyRankNicknames(guild).catch(e => note('nickname', e)), 250);
     }
   }
 }
@@ -804,6 +804,26 @@ const STYLE_LABELS = {
   highlight: 'Highlight Style'
 };
 
+// The host chooses one of three looks for an amo-yes lobby. The choice used to
+// be stored and then printed as text while every style rendered identically,
+// which made the picker a menu that does nothing -- worse than not offering it,
+// because the player made a decision that had no effect.
+//
+// Each style now carries its own colour, and both the lobby and the match
+// channel read it from here so the two can never disagree about what was picked.
+const STYLE_THEMES = {
+  apostado:  { color: 0xE03131, accent: '\u{1F534}', blurb: 'Classic red apuesta look' },
+  zelika:    { color: 0x9C36B5, accent: '\u{1F7E8}', blurb: 'Purple Zelika theme' },
+  highlight: { color: 0xF5A623, accent: '\u{1F7E1}', blurb: 'Gold highlight look' }
+};
+
+// null for amo-no and e-sport, which set no style, and for any unknown value, so
+// a bad value degrades to the normal lobby colour instead of rendering wrongly.
+function styleTheme(match) {
+  const key = String((match && match.style) || '').toLowerCase();
+  return STYLE_THEMES[key] || null;
+}
+
 // Returns null when there is no style, so callers can omit the line entirely
 // rather than printing an empty field. amo-no and e-sport never set one.
 function styleLabel(style) {
@@ -817,16 +837,24 @@ function styleLabel(style) {
 // Two renderings of the same value, so the wording can never disagree.
 //   styleLine    - compact, for the field row in the match channel
 //   styleHeading - a large top-of-embed heading, for the lobby
+//
+// Both carry the style's own accent and a one-line description, so a player
+// scrolling back can tell which style a lobby was without reading the name.
 function styleLine(match) {
   const label = styleLabel(match && match.style);
-  return label ? `🎨 **Style:** ${label}` : null;
+  if (!label) return null;
+  const theme = styleTheme(match);
+  return `${theme ? theme.accent : '\u{1F3A8}'} **Style:** ${label}`;
 }
 
 // '##' is Discord's only font-size control: it renders as a heading, so the style
 // reads as the headline of the lobby instead of another line of body text.
 function styleHeading(match) {
   const label = styleLabel(match && match.style);
-  return label ? `## 🎨 ${label}` : null;
+  if (!label) return null;
+  const theme = styleTheme(match);
+  const blurb = theme ? ` \u2014 _${theme.blurb}_` : '';
+  return `## ${theme ? theme.accent : '\u{1F3A8}'} ${label}${blurb}`;
 }
 
 function buildMatchBoxEmbed(guild, match, creatorUser) {
@@ -846,10 +874,14 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const strip = slotStrip(filled1, filled2, size);
   // Heading, not a line: the style is the first thing a player reads.
   const styleText = styleHeading(match);
+  // The style colour, except once the lobby is full: "both teams full" is green
+  // on every mode, and the style overriding it would lose that signal.
+  const theme = styleTheme(match);
+  const lobbyColor = full ? COLORS.success : (theme ? theme.color : COLORS.primary);
 
   const embed = new EmbedBuilder()
     .setTitle(`${config.emojis.game} ${getModeConfig(mode).displayName} • ${size}v${size} LOBBY`)
-    .setColor(full ? COLORS.success : COLORS.primary)
+    .setColor(lobbyColor)
     .setDescription(
       // The style leads when there is one, so it is the first thing read.
       (styleText ? `${styleText}\n` : '') +
@@ -911,13 +943,13 @@ async function updateMatchChannel(guild, match) {
     infoMsg = await fetchMessage(channel, match.roomInfoMessageId);
   }
   if (infoMsg) {
-    await infoMsg.edit({ embeds: [embed] }).catch(() => {});
+    await infoMsg.edit({ embeds: [embed] }).catch(e => note('edit', e));
     return;
   }
-  await channel.messages.fetch({ limit: 20 }).catch(() => {});
+  await channel.messages.fetch({ limit: 20 }).catch(e => note('edit', e));
   const lastMsg = channel.lastMessage;
   if (lastMsg && lastMsg.author.id === client.user.id && lastMsg.embeds.length) {
-    await lastMsg.edit({ embeds: [embed] }).catch(() => {});
+    await lastMsg.edit({ embeds: [embed] }).catch(e => note('edit', e));
     match.roomInfoMessageId = lastMsg.id;
     manager.persistMatches();
   } else {
@@ -931,8 +963,8 @@ async function updateMatchChannel(guild, match) {
 
 async function cancelMatch(guild, match, cancelText) {
   if (match.phase === 'CANCELLED') {
-    await manager.deleteVoiceChannels(guild, match).catch(() => {});
-    await manager.deleteChannel(guild, match).catch(() => {});
+    await manager.deleteVoiceChannels(guild, match).catch(e => note('voice', e));
+    await manager.deleteChannel(guild, match).catch(e => note('voice', e));
     manager.removeMatch(match.id);
     return;
   }
@@ -940,16 +972,16 @@ async function cancelMatch(guild, match, cancelText) {
   match.phase = 'CANCELLING';
   manager.persistMatches();
   const restored = await manager.returnPlayersToOriginal(guild, match).catch(() => null);
-  if (restored) await manager.verifyRestore(guild, match).catch(() => {});
-  await manager.deleteVoiceChannels(guild, match).catch(() => {});
-  await manager.deleteChannel(guild, match).catch(() => {});
+  if (restored) await manager.verifyRestore(guild, match).catch(e => note('persist', e));
+  await manager.deleteVoiceChannels(guild, match).catch(e => note('persist', e));
+  await manager.deleteChannel(guild, match).catch(e => note('persist', e));
   match.phase = 'CANCELLED';
   if (match.joinTimeout) { clearTimeout(match.joinTimeout); match.joinTimeout = null; }
   if (match.configTimeout) { clearTimeout(match.configTimeout); match.configTimeout = null; }
   const baseChannel = guild.channels.cache.get(match.channelId);
   if (baseChannel && match.message) {
     const msg = await fetchMessage(baseChannel, match.message);
-    if (msg) await msg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
+    if (msg) await msg.edit({ content: cancelText, embeds: [], components: [] }).catch(e => note('edit', e));
   }
   await clearJoinButtons(guild, match);
   await clearVotePanel(guild, match);
@@ -957,11 +989,11 @@ async function cancelMatch(guild, match, cancelText) {
   if (roomChannel) {
     if (match.resultMessageId && match.resultMessageId !== match.message) {
       const rmsg = await fetchMessage(roomChannel, match.resultMessageId);
-      if (rmsg) await rmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
+      if (rmsg) await rmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(e => note('edit', e));
     }
     if (match.cancelMsgId && match.cancelMsgId !== match.resultMessageId) {
       const cmsg = await fetchMessage(roomChannel, match.cancelMsgId);
-      if (cmsg) await cmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(() => {});
+      if (cmsg) await cmsg.edit({ content: cancelText, embeds: [], components: [] }).catch(e => note('edit', e));
     }
   }
   manager.removeMatch(match.id);
@@ -1019,7 +1051,7 @@ async function handlePlaySizePick(interaction) {
     playFlow.setDraft(userId, { style });
     return interaction.update({
       embeds: [], components: [], content: `🎨 **${label}** selected. Now pick your team size.`
-    }).catch(() => {});
+    }).catch(e => note('style-picker', e));
   }
 
   // Mode dropdown: just record the choice and re-render, so the player can then
@@ -1046,13 +1078,13 @@ async function handlePlaySizePick(interaction) {
     // Exactly one response per interaction. The menu is updated in place, which is
     // all that is needed when this channel hosts a single mode -- adding a
     // "now pick a size" prompt on top of that would be noise.
-    await interaction.update(parts).catch(() => {});
+    await interaction.update(parts).catch(e => note('mode-picker', e));
     if (allowed.length === 1) return;
     const where = modeCfg.matchChannelId ? `<#${modeCfg.matchChannelId}>` : 'the match channel';
     return interaction.followUp({
       content: `✅ Mode set to **${modeCfg.displayName}**. Now pick a team size.\n📍 **${modeCfg.displayName}** matches are hosted in ${where}.`,
       flags: 64
-    }).catch(() => {});
+    }).catch(e => note('mode-picker', e));
   }
 
   const size = parseInt(interaction.values[0], 10);
@@ -1106,7 +1138,7 @@ async function handlePlaySizePick(interaction) {
       return interaction.reply({
         content: '⚠️ I could not show the style picker. Please run `!play` again.',
         flags: 64
-      }).catch(() => {});
+      }).catch(e => note('style-picker', e));
     });
   }
 
@@ -1236,7 +1268,7 @@ async function openCancelVote(guild, match, interaction) {
     if (existing) msg = existing;
   }
   if (msg) {
-    await msg.edit({ embeds: [embed], components: [row] }).catch(() => {});
+    await msg.edit({ embeds: [embed], components: [row] }).catch(e => note('edit', e));
   } else {
     const sent = await roomChannel.send({ content: `⚠️ **A cancel vote has started!** Match ${match.teamSize}v${match.teamSize} — press the button to vote.`, embeds: [embed], components: [row] }).catch(() => null);
     if (sent) {
@@ -1422,7 +1454,7 @@ async function handleResetVotes(interaction, match) {
   await syncVotePanel(interaction.guild, match);
   await interaction.reply({ content: '🔄 All votes have been reset!', ephemeral: true });
   const room = interaction.guild.channels.cache.get(match.channelId2);
-  if (room) room.send({ content: `🔄 **Votes have been reset** by <@${interaction.user.id}>. Captains <@${match.team1[0]}> & <@${match.team2[0]}> can vote again.` }).catch(() => {});
+  if (room) room.send({ content: `🔄 **Votes have been reset** by <@${interaction.user.id}>. Captains <@${match.team1[0]}> & <@${match.team2[0]}> can vote again.` }).catch(e => note('send', e));
 }
 
 function mvpPlayerOptions(guild, match, excludeId, teamFilter) {
@@ -1522,7 +1554,7 @@ async function syncVotePanel(guild, match) {
   if (match.votePanelMessageId) {
     const msg = await fetchMessage(room, match.votePanelMessageId);
     if (msg) {
-      await msg.edit({ embeds: [embed] }).catch(() => {});
+      await msg.edit({ embeds: [embed] }).catch(e => note('edit', e));
       return;
     }
   }
@@ -1537,7 +1569,7 @@ async function clearVotePanel(guild, match) {
   const room = guild.channels.cache.get(match.channelId2);
   if (room && match.votePanelMessageId) {
     const msg = await fetchMessage(room, match.votePanelMessageId);
-    if (msg) await msg.delete().catch(() => {});
+    if (msg) await msg.delete().catch(e => note('delete', e));
   }
   match.votePanelMessageId = null;
   manager.persistMatches();
@@ -1606,10 +1638,14 @@ function buildMainMatchEmbed(match, guild) {
     .setThumbnail(icon), guild);
 }
 
-// Winner side goes gold, loser side goes red, everything else blurple.
+// Winner side goes gold, loser side goes red, everything else blurple -- except
+// an amo-yes match, which wears its chosen style's colour until there is a result
+// to report. The style is set by the host, so it is applied before, never after.
 function resultColor(match) {
   if (match && match.settled) return COLORS.gold;
   if (match && match.resultStatus && /fail|error|didn't match|expired/i.test(String(match.resultStatus))) return COLORS.danger;
+  const theme = styleTheme(match);
+  if (theme) return theme.color;
   return COLORS.primary;
 }
 
@@ -1618,7 +1654,7 @@ async function updateResultBox(guild, match) {
   if (!roomChannel || !match.resultMessageId) return;
   const msg = await fetchMessage(roomChannel, match.resultMessageId);
   if (!msg) return;
-  await msg.edit({ embeds: [buildMainMatchEmbed(match, guild)], components: buildMatchMenu(match) }).catch(() => {});
+  await msg.edit({ embeds: [buildMainMatchEmbed(match, guild)], components: buildMatchMenu(match) }).catch(e => note('edit', e));
 }
 
 // The announcement posted once both teams are full.
@@ -1690,9 +1726,9 @@ async function startFullMatch(guild, match) {
     errLog('startFullMatch channel creation failed:', e);
     try {
       // Best-effort cleanup so a half-created pair is not left behind.
-      if (team1Channel) await team1Channel.delete().catch(() => {});
-      if (team2Channel) await team2Channel.delete().catch(() => {});
-      if (roomChannel) await roomChannel.delete().catch(() => {});
+      if (team1Channel) await team1Channel.delete().catch(e => note('delete', e));
+      if (team2Channel) await team2Channel.delete().catch(e => note('delete', e));
+      if (roomChannel) await roomChannel.delete().catch(e => note('delete', e));
     } catch (e2) { /* ignore */ }
     match.voiceChannels = [];
     match.channelId2 = null;
@@ -1709,7 +1745,7 @@ async function startFullMatch(guild, match) {
         await msg.edit({
           embeds: [buildMatchBoxEmbed(guild, match, null)],
           components: buildMatchButtons(match, client.user.id)
-        }).catch(() => {});
+        }).catch(e => note('edit', e));
       }
     }
     await syncJoinButtons(guild, match);
@@ -1725,7 +1761,7 @@ async function startFullMatch(guild, match) {
       await msg2.edit({
         embeds: [buildMatchBoxEmbed(guild, match, null)],
         components: []
-      }).catch(() => {});
+      }).catch(e => note('edit', e));
     }
 
     await clearJoinButtons(guild, match);
@@ -1733,7 +1769,7 @@ async function startFullMatch(guild, match) {
     // The banner is the last thing posted in the matches channel, so it states
     // plainly that everyone is in and the lobby is locked.
     const readyEmbed = buildFullMatchBanner(guild, match);
-    await apostado.send({ embeds: [readyEmbed] }).catch(() => {});
+    await apostado.send({ embeds: [readyEmbed] }).catch(e => note('fullmatch-banner', e));
   }
 
   const roomChannelId = match.channelId2;
@@ -1834,7 +1870,7 @@ async function syncJoinButtons(guild, match) {
     btnMsg = await fetchMessage(channel, match.buttonsMessageId);
   }
   if (btnMsg) {
-    await btnMsg.edit({ embeds: [], components }).catch(() => {});
+    await btnMsg.edit({ embeds: [], components }).catch(e => note('edit', e));
     return btnMsg;
   }
   const sent = await channel.send({ embeds: [], components }).catch(() => null);
@@ -1851,9 +1887,9 @@ async function clearJoinButtons(guild, match, fallbackContent) {
   const btnMsg = await fetchMessage(channel, match.buttonsMessageId);
   if (btnMsg) {
     if (fallbackContent) {
-      await btnMsg.edit({ content: fallbackContent, embeds: [], components: [] }).catch(() => {});
+      await btnMsg.edit({ content: fallbackContent, embeds: [], components: [] }).catch(e => note('edit', e));
     } else {
-      await btnMsg.delete().catch(() => {});
+      await btnMsg.delete().catch(e => note('delete', e));
     }
   }
   match.buttonsMessageId = null;
@@ -1922,7 +1958,7 @@ async function syncStoreEmbed(guild, channelOverride) {
     const msgs = await channel.messages.fetch({ limit: 30 });
     for (const m of msgs.values()) {
       if (m.author.id === client.user.id && m.embeds && m.embeds[0] && m.embeds[0].title && String(m.embeds[0].title).toLowerCase().includes('store')) {
-        await m.delete().catch(() => {});
+        await m.delete().catch(e => note('delete', e));
       }
     }
   } catch (e) {
@@ -2050,14 +2086,14 @@ async function syncCombinedLeaderboard(guild) {
     liveLeaderboardSyncing = false;
     if (liveLeaderboardQueued) {
       liveLeaderboardQueued = false;
-      setTimeout(() => syncCombinedLeaderboard(guild).catch(() => {}), 50);
+      setTimeout(() => syncCombinedLeaderboard(guild).catch(e => note('leaderboard', e)), 50);
     }
   }
 }
 
 function refreshCombinedLeaderboard(guild) {
   if (!guild) return;
-  syncCombinedLeaderboard(guild).catch(() => {});
+  syncCombinedLeaderboard(guild).catch(e => note('leaderboard', e));
 }
 
 const reportDrafts = new Map();
@@ -2109,7 +2145,7 @@ async function ensureReportButtonMessage(guild, channel) {
   try {
     const msgs = await channel.messages.fetch({ limit: 20 });
     for (const m of msgs.values()) {
-      if (m.author.id === client.user.id && m.components && m.components.length) await m.delete().catch(() => {});
+      if (m.author.id === client.user.id && m.components && m.components.length) await m.delete().catch(e => note('delete', e));
     }
   } catch (e) { /* ignore */ }
   const embed = new EmbedBuilder()
@@ -2130,7 +2166,7 @@ async function ensureReportButtonMessage(guild, channel) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('report_player').setEmoji('🛡️').setLabel('Report Player').setStyle(ButtonStyle.Danger)
   );
-  await channel.send({ embeds: [withBanner(embed, channel.guild)], components: [row] }).catch(() => {});
+  await channel.send({ embeds: [withBanner(embed, channel.guild)], components: [row] }).catch(e => note('send', e));
 }
 
 async function ensureCheaterChannels(guild) {
@@ -2169,11 +2205,11 @@ async function ensureCheaterChannels(guild) {
   }
   if (checkChannel) {
     await renameIfDifferent(checkChannel, CHANNEL_NAMES.checkChannel);
-    checkChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
+    checkChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(e => note('perms', e));
     for (const rid of checkerRoleIds) {
       checkChannel.permissionOverwrites.create(rid, {
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
-      }).catch(() => {});
+      }).catch(e => note('perms', e));
     }
     S.checkChannelId = checkChannel.id;
     settingsStore.saveSettings(S);
@@ -2198,11 +2234,11 @@ async function ensureCheaterChannels(guild) {
     reportChannel.permissionOverwrites.create(guild.id, {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
       deny: [PermissionsBitField.Flags.SendMessages]
-    }).catch(() => {});
+    }).catch(e => note('perms', e));
     for (const rid of checkerRoleIds) {
       reportChannel.permissionOverwrites.create(rid, {
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
-      }).catch(() => {});
+      }).catch(e => note('perms', e));
     }
     S.reportChannelId = reportChannel.id;
     settingsStore.saveSettings(S);
@@ -2228,11 +2264,11 @@ async function ensureCheaterChannels(guild) {
     exposeChannel.permissionOverwrites.create(guild.id, {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
       deny: [PermissionsBitField.Flags.SendMessages]
-    }).catch(() => {});
+    }).catch(e => note('perms', e));
     for (const rid of checkerRoleIds) {
       exposeChannel.permissionOverwrites.create(rid, {
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
-      }).catch(() => {});
+      }).catch(e => note('perms', e));
     }
     S.exposeChannelId = exposeChannel.id;
     settingsStore.saveSettings(S);
@@ -2293,7 +2329,7 @@ async function renderReportMessage(guild, report) {
     content,
     embeds: [buildReportEmbed(guild, report)],
     components: final ? [] : buildReportButtons(report)
-  }).catch(() => {});
+  }).catch(e => note('edit', e));
 }
 
 async function postExpose(guild, report, checkerId, attachments, cheatType) {
@@ -2325,7 +2361,7 @@ async function applyCheaterAction(guild, report) {
   const member = await guild.members.fetch(report.cheaterId).catch(() => null);
   if (member) {
     const res = await applyJail(guild, member).catch(() => ({ role: null, affected: [], removedRoles: [] }));
-    await member.roles.add(CHEATER_ROLE_ID).catch(() => {});
+    await member.roles.add(CHEATER_ROLE_ID).catch(e => note('role', e));
     if (res.role) {
       jailModule.jailUser(report.cheaterId, res.role.id, guild.id, null, `Cheater (${report.id})`, report.checkedBy || 'checker', res.affected, res.removedRoles);
     }
@@ -2338,14 +2374,14 @@ async function applyCheaterAction(guild, report) {
   const roleId = settingsStore.loadSettings().cheaterMarkRoleId;
   if (roleId) {
     const reporter = await guild.members.fetch(report.reporterId).catch(() => null);
-    if (reporter) await reporter.roles.add(roleId).catch(() => {});
+    if (reporter) await reporter.roles.add(roleId).catch(e => note('role', e));
   }
   refreshCombinedLeaderboard(guild);
   try {
     const reporter = await guild.members.fetch(report.reporterId).catch(() => null);
     if (reporter) {
       const msg = `🛡️ **Report ${report.id} confirmed!** The player you reported was marked as a cheater.\nYou earned **+${REPORT_REWARD} pts**${roleId ? ' and a reward role.' : '.'}`;
-      await reporter.send(msg).catch(() => {});
+      await reporter.send(msg).catch(e => note('leaderboard', e));
     }
   } catch { /* ignore */ }
 }
@@ -2443,7 +2479,7 @@ async function handleReportPlatform(interaction) {
         content: `${ping} — new report ${report.id}!`,
         embeds: [buildReportEmbed(interaction.guild, report)],
         components: buildReportButtons(report)
-      }).catch(() => {});
+      }).catch(e => note('edit', e));
     }
   }
 
@@ -2563,7 +2599,7 @@ async function handleProofDone(interaction) {
   await renderReportMessage(interaction.guild, updated);
 
   await interaction.reply({ content: `⛔ **Exposé posted** for ${id}${report.cheaterId ? '' : ' — but the reported player had no resolvable ID (no jail/reward applied).'}`, ephemeral: true });
-  try { if (thread && thread.isThread()) await thread.setArchived(true).catch(() => {}); } catch { /* ignore */ }
+  try { if (thread && thread.isThread()) await thread.setArchived(true).catch(e => note('thread', e)); } catch { /* ignore */ }
 }
 
 const applyApps = new Map();
@@ -2603,7 +2639,7 @@ async function ensureApplyButtonMessage(guild, channel) {
   try {
     const msgs = await channel.messages.fetch({ limit: 20 });
     for (const m of msgs.values()) {
-      if (m.author.id === client.user.id && m.components && m.components.length) await m.delete().catch(() => {});
+      if (m.author.id === client.user.id && m.components && m.components.length) await m.delete().catch(e => note('delete', e));
     }
   } catch (e) { /* ignore */ }
   const embed = new EmbedBuilder()
@@ -2624,7 +2660,7 @@ async function ensureApplyButtonMessage(guild, channel) {
     new ButtonBuilder().setCustomId('apply_start_checker').setEmoji('🛡️').setLabel('Apply as Checker').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('apply_start_staff').setEmoji('👥').setLabel('Apply as Staff').setStyle(ButtonStyle.Success)
   );
-  await channel.send({ embeds: [withBanner(embed, channel.guild)], components: [row] }).catch(() => {});
+  await channel.send({ embeds: [withBanner(embed, channel.guild)], components: [row] }).catch(e => note('send', e));
 }
 
 async function ensureApplyChannels(guild) {
@@ -2663,7 +2699,7 @@ async function ensureApplyChannels(guild) {
     applyChannel.permissionOverwrites.create(guild.id, {
       allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory],
       deny: [PermissionsBitField.Flags.SendMessages]
-    }).catch(() => {});
+    }).catch(e => note('perms', e));
     S.applyChannelId = applyChannel.id;
     settingsStore.saveSettings(S);
     await ensureApplyButtonMessage(guild, applyChannel);
@@ -2685,11 +2721,11 @@ async function ensureApplyChannels(guild) {
   }
   if (queueChannel) {
     await renameIfDifferent(queueChannel, CHANNEL_NAMES.queueChannel);
-    queueChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(() => {});
+    queueChannel.permissionOverwrites.create(guild.id, { deny: [PermissionsBitField.Flags.ViewChannel] }).catch(e => note('perms', e));
     for (const rid of getStaffRoleIds()) {
       queueChannel.permissionOverwrites.create(rid, {
         allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.SendMessages]
-      }).catch(() => {});
+      }).catch(e => note('perms', e));
     }
     S.applyQueueChannelId = queueChannel.id;
     settingsStore.saveSettings(S);
@@ -2835,7 +2871,7 @@ async function handleApplyStaffButton(interaction) {
     if (!member || !member.voice || !member.voice.channel) {
       return interaction.reply({ content: `ℹ️ <@${app.userId}> is not in any voice channel. Ask them to join one first, or mention them.`, ephemeral: true });
     }
-    await member.voice.setChannel(vc.id).catch(() => {});
+    await member.voice.setChannel(vc.id).catch(e => note('voice', e));
     return interaction.reply({ content: `🎙️ Moved <@${app.userId}> to **${vcName}**.`, ephemeral: true });
   }
 
@@ -2845,7 +2881,7 @@ async function handleApplyStaffButton(interaction) {
       return interaction.reply({ content: '❌ No role found to grant for **' + APPLY_TYPE_LABEL[app.roleType] + '**. Assign `&setrole ' + app.roleType + ' <role>`.' });
     }
     if (member) {
-      await member.roles.add(role).catch(() => {});
+      await member.roles.add(role).catch(e => note('role', e));
     }
     app.status = 'accepted';
     app.decidedBy = interaction.user.id;
@@ -2879,7 +2915,7 @@ async function renderApplyMessage(guild, app) {
   await msg.edit({
     embeds: [buildApplyEmbed(guild, app)],
     components: app.status === 'pending' ? buildApplyButtons(app.id) : []
-  }).catch(() => {});
+  }).catch(e => note('edit', e));
 }
 
 async function handleBuy(interaction, itemId) {
@@ -2930,20 +2966,20 @@ async function handleBuy(interaction, itemId) {
   });
 
   if (item.type === 'role') {
-    applyRankOneRole(interaction.guild, computeCombinedRanking()).catch(() => {});
+    applyRankOneRole(interaction.guild, computeCombinedRanking()).catch(e => note('applications', e));
   } else {
     const logsChannel = interaction.guild.channels.cache.get(config.logsChannelId);
     const staffMention = config.staffRoles.length ? config.staffRoles.map(id => `<@&${id}>`).join(' ') : '';
     if (logsChannel) {
       await logsChannel.send({
         content: `💎 **Diamond/Gems purchase!**\nBuyer: <@${member.id}>\nItem: **${item.name}** (${item.cost} pts deducted)\nStaff, please deliver the diamonds.${staffMention ? `\n${staffMention}` : ''}`
-      }).catch(() => {});
+      }).catch(e => note('send', e));
     } else {
-      await interaction.channel.send({ content: `💎 <@${member.id}> bought **${item.name}** (${item.cost} pts deducted). ${staffMention || 'Staff'}, please deliver the diamonds.` }).catch(() => {});
+      await interaction.channel.send({ content: `💎 <@${member.id}> bought **${item.name}** (${item.cost} pts deducted). ${staffMention || 'Staff'}, please deliver the diamonds.` }).catch(e => note('send', e));
     }
   }
 
-  if (syncStoreEmbed) syncStoreEmbed(interaction.guild).catch(() => {});
+  if (syncStoreEmbed) syncStoreEmbed(interaction.guild).catch(e => note('send', e));
   refreshCombinedLeaderboard(interaction.guild);
   const suffix = item.type === 'role' ? `Role <@&${item.roleId}> granted.` : `Staff has been notified to deliver your diamonds 💎.`;
   return interaction.reply({ content: `✅ Purchased **${item.name}**! Spent **${item.cost} pts** from your balance. ${suffix}`, ephemeral: true });
@@ -2995,10 +3031,10 @@ async function resumeInterruptedTeardowns(guild) {
     try {
       if (m.phase === 'CANCELLING' || m.phase === 'CANCELLED') {
         console.log(`[RESTART] resuming cancelled-match cleanup for ${m.id} (phase=${m.phase})`);
-        await cancelMatch(guild, m, `🧹 **Match cleanup resumed after a bot restart.**`).catch(() => {});
+        await cancelMatch(guild, m, `🧹 **Match cleanup resumed after a bot restart.**`).catch(e => note('restart-cleanup', e));
       } else if (m.phase === 'FINISHING' || m.phase === 'FINISHED') {
         console.log(`[RESTART] resuming finished-match cleanup for ${m.id} (phase=${m.phase})`);
-        await manager.finishMatch(guild, m).catch(() => {});
+        await manager.finishMatch(guild, m).catch(e => note('match-lifecycle', e));
       }
     } catch (e) {
       console.log(`[RESTART] cleanup resume error for ${m.id}: ${e.message}`);
@@ -3065,7 +3101,7 @@ client.once(Events.ClientReady, async (c) => {
   }, 45000);
   const guild = c.guilds.cache.first();
   const ranked = computeCombinedRanking();
-  if (guild && ranked.length) applyRankOneRole(guild, ranked).catch(() => {});
+  if (guild && ranked.length) applyRankOneRole(guild, ranked).catch(e => note('applications', e));
   for (const g of c.guilds.cache.values()) {
     syncInviteCache(g);
   }
@@ -3240,7 +3276,7 @@ client.on(Events.MessageCreate, async (message) => {
       playFlow.pickMessageIds.set(message.author.id, msg.id);
     }
     if (note) {
-      return message.reply(note).catch(() => {});
+      return message.reply(note).catch(e => note('picker', e));
     }
     return;
   }
@@ -3315,7 +3351,7 @@ async function cleanupOldMessages(channel) {
     if (toDelete.size > 0) {
       await channel.bulkDelete(toDelete).catch(async () => {
         for (const m of toDelete.values()) {
-          await m.delete().catch(() => {});
+          await m.delete().catch(e => note('bulk-delete', e));
         }
       });
     }
@@ -3457,7 +3493,7 @@ async function settleMatchResult(guild, match) {
         .setColor(COLORS.green)
         .setDescription(lines.join('\n'))
         .setFooter({ text: `Winner MVP <@${match.mvpWinnerId}> vs Loser MVP <@${match.mvpLoserId}>` });
-      await msg.edit({ embeds: [resultEmbed], components: [] }).catch(() => {});
+      await msg.edit({ embeds: [resultEmbed], components: [] }).catch(e => note('edit', e));
     }
   }
 
@@ -3465,7 +3501,7 @@ async function settleMatchResult(guild, match) {
   await clearVotePanel(guild, match);
 
   await manager.finishMatch(guild, match);
-  applyRankNicknames(guild).catch(() => {});
+  applyRankNicknames(guild).catch(e => note('nickname', e));
   refreshCombinedLeaderboard(guild);
 }
 
@@ -3475,14 +3511,14 @@ async function timeoutMatch(guild, matchId, phase = 'lobby') {
   const channel = guild.channels.cache.get(match.channelId);
   if (channel) {
     const msg = await fetchMessage(channel, match.message);
-    if (msg) await msg.delete().catch(() => {});
+    if (msg) await msg.delete().catch(e => note('delete', e));
   }
   await clearJoinButtons(guild, match);
   if (channel) {
     if (phase === 'config') {
-      await channel.send('⏰ **Room config timed out!** The host didn\'t set up the room within 30 seconds. Match cancelled.').catch(() => {});
+      await channel.send('⏰ **Room config timed out!** The host didn\'t set up the room within 30 seconds. Match cancelled.').catch(e => note('delete', e));
     } else {
-      await channel.send('⏰ **Match timed out!** The lobby didn\'t fill up within 2 minutes.').catch(() => {});
+      await channel.send('⏰ **Match timed out!** The lobby didn\'t fill up within 2 minutes.').catch(e => note('send', e));
     }
   }
   manager.removeMatch(matchId);
@@ -3518,11 +3554,11 @@ async function performJoin(interaction, match, team) {
       if (!started) {
         await interaction.channel.send({
           content: `❌ I could not create the match voice channels, so the match was **not** started and the lobby is still open. Check that I have **Manage Channels**.`
-        }).catch(() => {});
+        }).catch(e => note('send', e));
       }
     } catch (e) {
       console.error('Error starting match:', e);
-      await interaction.channel.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(() => {});
+      await interaction.channel.send({ content: `❌ Error starting match: ${e.message}. Make sure the bot can manage channels.` }).catch(e => note('send', e));
     }
   }
 }
@@ -3531,7 +3567,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // No slash commands are registered, but if one is ever invoked anyway, answer
   // cleanly instead of falling through to the button/modal routing below.
   if (interaction.isChatInputCommand()) {
-    return interaction.reply({ content: '⚠️ Unknown command.', flags: 64 }).catch(() => {});
+    return interaction.reply({ content: '⚠️ Unknown command.', flags: 64 }).catch(e => note('slash-command', e));
   }
 
   try {
@@ -3635,14 +3671,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // moment the host is done with it. It was kept alive while the form was open
       // so closing the form without submitting left them a way back in.
       const pickerMsg = await fetchMessage(channel, match.pickerMessageId);
-      if (pickerMsg) await pickerMsg.delete().catch(() => {});
+      if (pickerMsg) await pickerMsg.delete().catch(e => note('picker', e));
       match.pickerMessageId = null;
 
       // match.message is null for a match whose setup message was never posted,
       // which is the normal path since the form is opened directly. fetchMessage
       // returns null for that rather than handing back the last 50 messages.
       const oldMsg = await fetchMessage(channel, match.message);
-      if (oldMsg) await oldMsg.delete().catch(() => {});
+      if (oldMsg) await oldMsg.delete().catch(e => note('picker', e));
 
       const newMsg = await channel.send({ embeds: [matchEmbed] });
       match.message = newMsg.id;
@@ -3662,7 +3698,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setColor(COLORS.success)
           .setDescription(`${saved}\n\nYour lobby is live — players can now join their teams.`)
           .setFooter({ text: BRANDING }), interaction.guild)]
-      }).catch(() => {});
+      }).catch(e => note('deferred-reply', e));
       if (match.configTimeout) {
         clearTimeout(match.configTimeout);
         match.configTimeout = null;
@@ -3673,7 +3709,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }, 2 * 60 * 1000);
     } catch (e) {
       console.error('Error creating match:', e);
-      await interaction.editReply({ content: `❌ Error creating match: ${e.message}.` }).catch(() => {});
+      await interaction.editReply({ content: `❌ Error creating match: ${e.message}.` }).catch(e => note('match-lifecycle', e));
     }
   }
 
@@ -3793,7 +3829,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     let msg;
     const announce = (text) => {
       const roomChannel = interaction.guild.channels.cache.get(match.channelId2);
-      if (roomChannel) roomChannel.send({ content: text }).catch(() => {});
+      if (roomChannel) roomChannel.send({ content: text }).catch(e => note('send', e));
     };
     const voteLabel = isWinner ? '🏆 Winner MVP' : '💪 Loser MVP';
     if (!isCaptainVote) {
@@ -4078,7 +4114,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           components: [new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`cancelfvote_${match.id}`).setLabel('🗳️ Vote for Cancel').setStyle(ButtonStyle.Danger)
           )]
-        }).catch(() => {});
+        }).catch(e => note('edit', e));
       }
 
       if (votes >= needed) {
@@ -4096,9 +4132,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     errLog(`InteractionCreate error (${interaction.customId}):`, e);
     try {
       if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({ content: '❌ Something went wrong. Please try again.' }).catch(() => {});
+        await interaction.editReply({ content: '❌ Something went wrong. Please try again.' }).catch(e => note('deferred-reply', e));
       } else {
-        await interaction.reply({ content: '❌ Something went wrong. Please try again.', ephemeral: true }).catch(() => {});
+        await interaction.reply({ content: '❌ Something went wrong. Please try again.', ephemeral: true }).catch(e => note('deferred-reply', e));
       }
     } catch { /* ignore */ }
   }
@@ -4137,7 +4173,7 @@ const adminCommands = {
     }
     for (const mode of ['amo', 'esport']) storage.resetAllPoints(mode);
     await message.reply('🔄 **All points have been reset for all modes!** Rank nicknames cleared.');
-    stripRankNicknames(message.guild).catch(() => {});
+    stripRankNicknames(message.guild).catch(e => note('nickname', e));
     refreshCombinedLeaderboard(message.guild);
   },
   setpoints: async (message, mode = 'amo') => {
@@ -4158,7 +4194,7 @@ const adminCommands = {
     const type = (args[3] || 'win').toLowerCase() === 'loss' ? 'loss' : 'win';
     const result = storage.addPoints(userId, points, type, mode);
     await message.reply(`✅ Added **${points}** points to <@${userId}>. Total: **${result.totalPoints}**`);
-    applyRankNicknames(message.guild).catch(() => {});
+    applyRankNicknames(message.guild).catch(e => note('nickname', e));
     refreshCombinedLeaderboard(message.guild);
   }
 };
@@ -4441,18 +4477,18 @@ client.on(Events.MessageCreate, async (message) => {
       const fetched = await message.channel.messages.fetch({ limit: Math.min(count + 1, 100) });
       const targets = [...fetched.values()].filter(m => m.id !== message.id).slice(0, count);
       const delCount = targets.length;
-      await message.delete().catch(() => {});
+      await message.delete().catch(e => note('bulk-delete', e));
       if (delCount > 0) {
         const ok = await message.channel.bulkDelete(targets, true).then(() => true).catch(() => false);
         if (!ok) {
           for (const m of targets) {
             if (m.id === message.id) continue;
-            await m.delete().catch(() => {});
+            await m.delete().catch(e => note('bulk-delete', e));
           }
         }
       }
       const conf = await message.channel.send(`✅ Successfully cleared **${delCount}** message(s)!`).catch(() => null);
-      if (conf) setTimeout(() => conf.delete().catch(() => {}), 4000);
+      if (conf) setTimeout(() => conf.delete().catch(e => note('delete', e)), 4000);
     } catch (e) {
       console.log('Clear error:', e.message);
     }
@@ -4463,7 +4499,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can refresh the store!');
     }
-    await message.delete().catch(() => {});
+    await message.delete().catch(e => note('delete', e));
     await syncStoreEmbed(message.guild, message.channel);
     return;
   }
@@ -4527,7 +4563,7 @@ if (content === '&applyfix' || content === '!applyfix') {
     }
     const mode = getModeByChannel(message.channel.id);
     const total = storage.adjustPoints(userId, -points, mode);
-    applyRankNicknames(message.guild).catch(() => {});
+    applyRankNicknames(message.guild).catch(e => note('nickname', e));
     refreshCombinedLeaderboard(message.guild);
     return message.reply(`❌ Removed **${points} pts** from <@${userId}> (${mode}). New total: **${total} pts**.`);
   }
@@ -4547,7 +4583,7 @@ if (content === '&applyfix' || content === '!applyfix') {
     const ids = Object.keys((data && data.players) || {});
     if (!ids.length) return message.reply(`ℹ️ No players are registered yet in **${getModeConfig(gm).displayName}** points.`);
     for (const id of ids) storage.adjustPoints(id, amt, gm);
-    applyRankNicknames(message.guild).catch(() => {});
+    applyRankNicknames(message.guild).catch(e => note('nickname', e));
     refreshCombinedLeaderboard(message.guild);
     return message.reply(`✅ Gave **${fmtNum(amt)} pts** to **${ids.length}** player(s) in **${getModeConfig(gm).displayName}**!`);
   }
@@ -4841,8 +4877,8 @@ if (content === '&applyfix' || content === '!applyfix') {
     await message.reply(`✅ **${key}** role set to <@&${roleId}>.`);
     if (key === 'checker' || key === 'staff') {
       for (const g of message.client.guilds.cache.values()) {
-        ensureCheaterChannels(g).catch(() => {});
-        ensureApplyChannels(g).catch(() => {});
+        ensureCheaterChannels(g).catch(e => note('persist', e));
+        ensureApplyChannels(g).catch(e => note('persist', e));
       }
     }
   } else if (content.startsWith('!jail')) {
@@ -4896,7 +4932,7 @@ if (content === '&applyfix' || content === '!applyfix') {
     }
     await message.reply('⏳ Updating rank nicknames...');
     const res = await applyRankNicknames(message.guild);
-    await message.channel.send(`✅ Rank nicknames updated: **${res.done}** set (${res.failed} skipped).`).catch(() => {});
+    await message.channel.send(`✅ Rank nicknames updated: **${res.done}** set (${res.failed} skipped).`).catch(e => note('nickname', e));
   } else if (content === '!resetvote') {
     if (!hasCommandAccess(message.member)) {
       return message.reply('❌ Only supervisors/admins can reset votes!');
@@ -5097,7 +5133,7 @@ if (content === '&applyfix' || content === '!applyfix') {
         await settleMatchResult(message.guild, adminMatch);
       } else {
         const pending = isWin ? '💪 **!l** loser' : '🏆 **!w** winner';
-        await message.channel.send({ content: `⏳ Waiting for the ${pending} before finishing the match.` }).catch(() => {});
+        await message.channel.send({ content: `⏳ Waiting for the ${pending} before finishing the match.` }).catch(e => note('send', e));
       }
       return;
     }
@@ -5156,7 +5192,7 @@ client.on(Events.GuildMemberAdd, async (member) => {
   refreshCombinedLeaderboard(guild);
   const inviter = guild.members.cache.get(usedInvite.inviterId);
   if (inviter) {
-    inviter.send(`🎉 **New member via your invite!**\n<@${member.id}> joined your server using your invite link. You earned **${points} points**!`).catch(() => {});
+    inviter.send(`🎉 **New member via your invite!**\n<@${member.id}> joined your server using your invite link. You earned **${points} points**!`).catch(e => note('leaderboard', e));
   }
   } catch (e) {
     errLog('GuildMemberAdd error:', e);
@@ -5201,7 +5237,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const fresh = await newState.guild.members.fetch(member.id).catch(() => null);
     const target = newState.guild.channels.cache.get(targetVoice);
     if (fresh && target && fresh.voice.channelId !== target.id) {
-      await fresh.voice.setChannel(targetVoice).catch(() => {});
+      await fresh.voice.setChannel(targetVoice).catch(e => note('voice', e));
       console.log(`[VOICE] pulled ${member.id} back to match voice (from ${newState.channelId})`);
     }
   }
@@ -5214,11 +5250,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const action = leftVoice ? 'left the match voice' : `switched to another voice channel (pulled back to <#${targetVoice}>)`;
   console.log(`[VOICE] ${member.id} ${action} -> violation ${count}/3`);
   const room = member.guild.channels.cache.get(match.channelId2);
-  if (room) room.send(`⚠️ <@${member.id}> ${action} (**${count}/3**).`).catch(() => {});
+  if (room) room.send(`⚠️ <@${member.id}> ${action} (**${count}/3**).`).catch(e => note('persist', e));
   if (count >= 3) {
     blacklistModule.blacklistUser(member.id, 30 * 60 * 1000, 'Abandoned the match voice 3 times', client.user.id);
-    await member.send('⛔ **You have been blacklisted for 30 minutes** for abandoning the match voice 3 times.').catch(() => {});
-    if (room) room.send(`⛔ <@${member.id}> has been **blacklisted for 30 minutes** for abandoning the match voice 3 times.`).catch(() => {});
+    await member.send('⛔ **You have been blacklisted for 30 minutes** for abandoning the match voice 3 times.').catch(e => note('send', e));
+    if (room) room.send(`⛔ <@${member.id}> has been **blacklisted for 30 minutes** for abandoning the match voice 3 times.`).catch(e => note('send', e));
   }
   } catch (e) {
     errLog('VoiceStateUpdate error:', e);
