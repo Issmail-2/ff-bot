@@ -116,7 +116,27 @@ function withThumbnail(embed, guild) {
   return embed;
 }
 
+// Puts the server banner above the embed, so announcements and the checker /
+// role-apply notices all carry the same artwork instead of looking like a wall
+// of plain text boxes.
+//
+// The image is the wide guild banner when the server has one. Discord only lets
+// the bot read a banner with the Guilds intent, and a server may not have set
+// one at all, so it falls back to the icon rendered as a banner. An embed that
+// already has an image is left alone -- this is a floor, not an override.
+function withBanner(embed, guild) {
+  try {
+    if (!guild) return embed;
+    if (embed.data && embed.data.image) return embed;
+    const banner = typeof guild.bannerURL === 'function' ? guild.bannerURL({ size: 512 }) : null;
+    if (banner) return embed.setImage(banner);
+    const icon = typeof guild.iconURL === 'function' ? guild.iconURL({ size: 512 }) : null;
+    if (icon) return embed.setImage(icon);
+  } catch (e) { /* guild may be partial during startup */ }
+  return embed;
+}
+
 module.exports = {
   COLORS, BRANDING, STICKERS, normalizeEmoji,
-  progressBar, slotStrip, divider, createEmbed, withThumbnail
+  progressBar, slotStrip, divider, createEmbed, withThumbnail, withBanner
 };

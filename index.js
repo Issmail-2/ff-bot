@@ -93,7 +93,7 @@ const jailModule = require('./utils/jail');
 const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const cheaterReports = require('./utils/cheaterReports');
-const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail } = require('./utils/ui');
+const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail, withBanner } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
 const inviteTracker = require('./utils/invites');
 const slash = require('./utils/slash');
@@ -2006,7 +2006,7 @@ async function ensureReportButtonMessage(guild, channel) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('report_player').setEmoji('🛡️').setLabel('Report Player').setStyle(ButtonStyle.Danger)
   );
-  await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+  await channel.send({ embeds: [withBanner(embed, channel.guild)], components: [row] }).catch(() => {});
 }
 
 async function ensureCheaterChannels(guild) {
@@ -2118,6 +2118,13 @@ async function ensureCheaterChannels(guild) {
 }
 
 function buildReportEmbed(guild, report) {
+  // The checker channel banner is applied here rather than at each send site, so
+  // every render of this embed -- new report, status change, claim -- carries it.
+  const _emb = buildReportEmbedBase(guild, report);
+  return withBanner(_emb, guild);
+}
+
+function buildReportEmbedBase(guild, report) {
   const statusMap = {
     pending: '⏳ Pending',
     claimed: '🙋 Claimed',
@@ -2187,7 +2194,7 @@ async function postExpose(guild, report, checkerId, attachments, cheatType) {
     .setFooter({ text: BRANDING });
   if (attachments && attachments[0]) embed.setImage(attachments[0]);
   const files = (attachments || []).map(u => ({ attachment: u }));
-  await channel.send({ embeds: [embed], files }).catch((e) => console.log('[CHEAT] expose send failed:', e.message));
+  await channel.send({ embeds: [withBanner(embed, guild)], files }).catch((e) => console.log('[CHEAT] expose send failed:', e.message));
 }
 
 async function applyCheaterAction(guild, report) {
@@ -2493,7 +2500,7 @@ async function ensureApplyButtonMessage(guild, channel) {
     new ButtonBuilder().setCustomId('apply_start_checker').setEmoji('🛡️').setLabel('Apply as Checker').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('apply_start_staff').setEmoji('👥').setLabel('Apply as Staff').setStyle(ButtonStyle.Success)
   );
-  await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+  await channel.send({ embeds: [withBanner(embed, channel.guild)], components: [row] }).catch(() => {});
 }
 
 async function ensureApplyChannels(guild) {
@@ -2597,7 +2604,9 @@ function buildApplyEmbed(guild, app) {
       { name: '🕒 Submitted', value: `<t:${Math.floor(app.at / 1000)}:f>`, inline: true }
     )
     .setFooter({ text: BRANDING });
-  return embed;
+  // Banner lives in the builder so the queue message keeps it through every
+  // status change (waiting VC, accepted, declined) rather than only on creation.
+  return withBanner(embed, guild);
 }
 
 function buildApplyButtons(appId) {
@@ -4448,7 +4457,15 @@ if (content === '&applyfix' || content === '!applyfix') {
       return message.reply(`❌ Channel <#${channelId}> not found in this server.`);
     }
     const text = raw.replace(/^[!&]announce\s+/i, '').replace(channelId, '').trim();
-    const sent = await target.send(text).catch((e) => {
+    // Wrapped in an embed so staff announcements carry the same server banner as
+    // every other automated message, instead of posting as bare wall of text.
+    const announceEmbed = withBanner(new EmbedBuilder()
+      .setTitle('📢 ANNOUNCEMENT')
+      .setColor(COLORS.primary)
+      .setDescription(text)
+      .setFooter({ text: BRANDING })
+      .setTimestamp(), message.guild);
+    const sent = await target.send({ embeds: [announceEmbed] }).catch((e) => {
       message.reply(`❌ Could not send: ${e.message}`);
       return null;
     });

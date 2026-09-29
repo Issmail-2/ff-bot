@@ -37,3 +37,4 @@ verify-routing.js
 verify-cancel.js
 verify-playcmd.js
 verify-fullbanner.js
+verify-banner.js
