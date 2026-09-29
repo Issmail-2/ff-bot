@@ -1064,8 +1064,12 @@ async function handlePlaySizePick(interaction) {
   if (getModeConfig(mode).requiresStyle && !draft.style) {
     playFlow.setDraft(userId, { size });
     const parts = playFlow.buildStylePicker(userId, interaction.guild, size);
-    await interaction.reply({ ...parts, flags: 64 }).catch(() => {});
-    return;
+    // Clear this message's dropdowns as the style box appears. interaction.reply()
+    // cannot touch the message the click came from, so the menu stayed live and
+    // fully clickable behind the style box. update() empties it, and the style
+    // box is a followUp instead.
+    await interaction.update({ embeds: [], components: [] }).catch(() => {});
+    return interaction.followUp({ ...parts, flags: 64 }).catch(() => {});
   }
 
   return continueToRoomDetails(interaction, size, mode, draft.style);
@@ -1082,22 +1086,36 @@ async function continueToRoomDetails(interaction, size, mode, style) {
   const match = manager.createMatch(userId, size, channelId, mode);
   if (style) match.style = style;
 
-  // The picker was transient navigation, so it is removed once chosen from.
+  // The picker is transient navigation and is removed once the choices are made.
   //
-  // The style box is posted with flags: 64, i.e. ephemeral. An ephemeral message
-  // cannot be deleted with the bot token -- it only exists under the token of the
-  // interaction that created it -- so interaction.message.delete() fails with a
-  // 404 and the box was left on screen for the rest of the session. The
-  // interaction-scoped delete is tried first, with the plain delete as fallback
-  // for a non-ephemeral picker.
-  let gone = false;
+  // Three different messages can be on screen at this point, and no single
+  // delete call covers all of them:
+  //   - the "Host a Match" box, a normal channel message, tracked by id
+  //   - the style box, posted with flags: 64, so ephemeral and not reachable with
+  //     the bot token at all -- only through the interaction that created it
+  //   - whichever one the final click came from
+  //
+  // Every attempt is tried rather than stopping at the first success. Short
+  // circuiting on the tracked id would delete the channel message and leave the
+  // ephemeral style box on screen, which is the exact thing being fixed.
+  const removals = [];
+
+  const pickerId = playFlow.takePickerMessageId(userId);
+  if (pickerId) {
+    removals.push(() => interaction.channel.messages.fetch(pickerId).then(m => m.delete()));
+  }
   if (typeof interaction.deleteReply === 'function') {
-    gone = await interaction.deleteReply().then(() => true).catch(() => false);
+    removals.push(() => interaction.deleteReply());
   }
-  if (!gone && interaction.message && interaction.message.id) {
-    gone = await interaction.message.delete().then(() => true).catch(() => false);
+  if (interaction.message && interaction.message.id) {
+    removals.push(() => interaction.message.delete());
   }
-  if (!gone) console.log(`[PLAY] picker message ${interaction.message && interaction.message.id} survived deletion`);
+
+  let removed = 0;
+  for (const remove of removals) {
+    try { await remove(); removed++; } catch (e) { /* already gone, or not ours */ }
+  }
+  if (!removed) console.log(`[PLAY] picker message survived deletion (user ${userId})`);
 
   const parts = playFlow.buildSetupMessageParts(match, userId, interaction.guild);
   const setupMsg = await interaction.channel.send(parts).catch(() => null);

@@ -240,6 +240,15 @@ function clearDraft(userId) {
   return drafts.delete(userId);
 }
 
+// Hands over the tracked picker message id and forgets it, so the caller can
+// delete the message itself and the map does not keep a stale entry pointing at
+// something that no longer exists.
+function takePickerMessageId(userId) {
+  const id = pickMessageIds.get(userId);
+  pickMessageIds.delete(userId);
+  return id || null;
+}
+
 function draftCount() {
   sweep();
   return drafts.size;
@@ -254,6 +263,7 @@ module.exports = {
   CUSTOM_ID,
   drafts,
   pickMessageIds,
+  takePickerMessageId,
   sweep,
   sizeLabel,
   buildSizePicker,
