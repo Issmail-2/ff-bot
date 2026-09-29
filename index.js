@@ -394,8 +394,9 @@ The **#1 ranked player** automatically receives the Role #1 role.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
-\`!play\` — **host a match**: opens a menu to choose 2v2/3v3/4v4, then asks for your room ID
+\`!play\` — **host a match**: choose PvP or Esport, then 2v2/3v3/4v4 from the menus, then enter your room ID
 \`!play 2v2 | 3v3 | 4v4\` — host a match directly
+\`!esport\` — same picker, preselected to Esport
 \`!esport 2v2 | 3v3 | 4v4\` — host an esport match
 \`!leaderboard\` — show the top players
 \`!cancelmatch\` — cancel the match you opened (works in any channel)
@@ -902,6 +903,26 @@ async function handlePlaySizePick(interaction) {
       content: '❌ That request expired. Type `!play` again to start a new one.',
       flags: 64
     });
+  }
+
+  // Mode dropdown: just record the choice and re-render, so the player can then
+  // pick a size against the right channel. Nothing is created yet.
+  if (interaction.customId === `${playFlow.CUSTOM_ID}_mode`) {
+    const mode = interaction.values[0];
+    if (!playFlow.MODES.some(m => m.value === mode)) {
+      return interaction.reply({ content: '⚠️ Unknown mode.', flags: 64 });
+    }
+    const modeCfg = getModeConfig(mode);
+    playFlow.setDraft(userId, { mode });
+    const parts = playFlow.buildSizePicker(userId, interaction.guild, { mode });
+    await interaction.update(parts).catch(() => {});
+    const where = mode === 'esport'
+      ? `<#${modeCfg.matchChannelId}>`
+      : `<#${modeCfg.matchChannelId}> or <#${modeCfg.ammoChannelId}>`;
+    return interaction.followUp({
+      content: `✅ Mode set to **${mode === 'esport' ? 'Esport' : 'PvP'}**. Now pick a team size.\n⚠️ ${mode === 'esport' ? 'Esport' : 'PvP'} matches must be hosted in ${where}.`,
+      flags: 64
+    }).catch(() => {});
   }
 
   const size = parseInt(interaction.values[0], 10);
@@ -2880,8 +2901,8 @@ client.on(Events.MessageCreate, async (message) => {
     const args = content.split(/\s+/);
     const typedSize = parseTeamSize(args[1]);
 
-    // Bare "!play" opens a team-size picker instead of asking the player to
-    // remember the syntax. Typing "!play 3v3" still works.
+    // Bare "!play" or "!esport" opens the mode + size picker instead of asking
+    // the player to remember the syntax. "!play 3v3" still works.
     if (!typedSize) {
       if (!isInRequiredVoice(message.member)) {
         return message.reply(voiceCheckMessage());
@@ -2893,7 +2914,7 @@ client.on(Events.MessageCreate, async (message) => {
       playFlow.setDraft(message.author.id, { mode });
       // Public, because the picker needs to persist for the host to click it
       // after the message is sent (ephemeral replies cannot host follow-ups).
-      const picker = playFlow.buildSizePicker(message.author.id, message.guild);
+      const picker = playFlow.buildSizePicker(message.author.id, message.guild, { mode });
       const msg = await message.channel.send(picker).catch(() => null);
       if (msg) {
         // Remembered so the picker can be replaced/cleaned up later.
@@ -3369,7 +3390,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // The moderation submenu shares this handler; both prefixes resolve the
     // same match and then dispatch on the selected value.
-    if (cid === playFlow.CUSTOM_ID) {
+    if (cid === `${playFlow.CUSTOM_ID}_mode` || cid === `${playFlow.CUSTOM_ID}_size`) {
       return handlePlaySizePick(interaction);
     }
 

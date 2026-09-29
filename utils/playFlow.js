@@ -39,15 +39,28 @@ function sizeLabel(n) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 1 - team size picker
+// Step 1 - mode + team size picker.
+//
+// Two dropdowns in one box: mode (PvP / Esport) and team size. Mode is picked
+// first because it decides which channel the match belongs to, but the size
+// dropdown is live from the start so a player who already knows they want 4v4
+// in the default mode can do it in one interaction.
 // ---------------------------------------------------------------------------
-function buildSizePicker(userId, guild) {
+const MODES = [
+  { value: 'amo', label: 'PvP — Custom Room', emoji: '⚔️', desc: 'Normal ranked custom room' },
+  { value: 'esport', label: 'Esport', emoji: '🏆', desc: 'Esport lobby and points' }
+];
+
+function buildSizePicker(userId, guild, opts = {}) {
+  const currentMode = MODES.some(m => m.value === opts.mode) ? opts.mode : 'amo';
+  const modeLabel = MODES.find(m => m.value === currentMode).label.split('—')[0].trim();
+
   const embed = withThumbnail(new EmbedBuilder()
     .setTitle(`${'🎮'} Host a Match`)
     .setColor(COLORS.primary)
     .setDescription(
-      `Hey <@${userId}> — pick a team size to host your match.\n\n` +
-      `Each team needs **N** players, so a **${sizeLabel(4)}** match needs **8** players total.`
+      `Hey <@${userId}> — pick a **mode** and a **team size**, then enter your room details.\n\n` +
+      `Each team needs **N** players, so **4v4** needs **8** players in total.`
     )
     .addFields(
       { name: '📋 Before you start', value: [
@@ -58,10 +71,26 @@ function buildSizePicker(userId, guild) {
     )
     .setFooter({ text: BRANDING }), guild);
 
+  const modeRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`${CUSTOM_ID}_mode`)
+      .setPlaceholder('1️⃣ Choose your mode…')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(MODES.map(m =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(m.label)
+          .setDescription(m.desc)
+          .setValue(m.value)
+          .setEmoji(m.emoji)
+          .setDefault(m.value === currentMode)
+      ))
+  );
+
   const row = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(CUSTOM_ID)
-      .setPlaceholder('⚙️ Choose your team size…')
+      .setCustomId(`${CUSTOM_ID}_size`)
+      .setPlaceholder('2️⃣ Choose your team size…')
       .setMinValues(1)
       .setMaxValues(1)
       .addOptions(TEAM_SIZES.map(n =>
@@ -73,7 +102,7 @@ function buildSizePicker(userId, guild) {
       ))
   );
 
-  return { embeds: [embed], components: [row] };
+  return { embeds: [embed], components: [modeRow, row] };
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +203,7 @@ function draftCount() {
 
 module.exports = {
   TEAM_SIZES,
+  MODES,
   EXPIRY_MS,
   CUSTOM_ID,
   drafts,
