@@ -40,3 +40,4 @@ verify-fullbanner.js
 verify-banner.js
 verify-backfill.js
 verify-roomchannel.js
+verify-style.js

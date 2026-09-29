@@ -763,6 +763,32 @@ function codeLine(label, value) {
   return `**${label}**  \`${value || '—'}\`   *(click to copy)*`;
 }
 
+// The host picks a style in the amo-yes flow and it is stored on the match as the
+// raw value ("apostado"). This turns that into something a player can read, and
+// is the single place the three names are spelled out for display.
+const STYLE_LABELS = {
+  apostado: 'Apostado Style',
+  zelika: 'Zelika Style',
+  highlight: 'Highlight Style'
+};
+
+// Returns null when there is no style, so callers can omit the line entirely
+// rather than printing an empty field. amo-no and e-sport never set one.
+function styleLabel(style) {
+  if (!style) return null;
+  const key = String(style).toLowerCase();
+  if (STYLE_LABELS[key]) return STYLE_LABELS[key];
+  // Unknown or hand-edited value: show it capitalised rather than hiding it.
+  return String(style).charAt(0).toUpperCase() + String(style).slice(1);
+}
+
+// A ready-made line for the two embeds that display it, so the wording is
+// identical in the lobby and the match channel.
+function styleLine(match) {
+  const label = styleLabel(match && match.style);
+  return label ? `🎨 **Style:** ${label}` : null;
+}
+
 function buildMatchBoxEmbed(guild, match, creatorUser) {
   const mode = match.mode || 'amo';
   const size = match.teamSize || 2;
@@ -778,6 +804,7 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const lockEmoji = match.key ? '🔒' : '🔓';
 
   const strip = slotStrip(filled1, filled2, size);
+  const styleText = styleLine(match);
 
   const embed = new EmbedBuilder()
     .setTitle(`${config.emojis.game} ${getModeConfig(mode).displayName} • ${size}v${size} LOBBY`)
@@ -786,7 +813,10 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
       `${strip}  **${joined}/${total}**\n` +
       `${full ? '✅ **Both teams full — starting soon**' : `⏳ **${pending}** more player${pending === 1 ? '' : 's'} needed`}\n` +
       `🟩 Team 1  ·  ⬜ empty  ·  🟥 Team 2\n` +
-      `👑 Host <@${match.creatorId}>   ·   🕐 Opened <t:${ts}:R>`
+      `👑 Host <@${match.creatorId}>   ·   🕐 Opened <t:${ts}:R>` +
+      // Only amo-yes sets a style. Omitted entirely for amo-no and e-sport
+      // rather than showing an empty row.
+      (styleText ? `\n${styleText}` : '')
     )
     .addFields(
       { name: `${config.emojis.team1} TEAM 1  \`${filled1}/${size}\``, value: t1Field || '*No players yet*', inline: true },
@@ -1470,6 +1500,9 @@ function buildMainMatchEmbed(match, guild) {
     { name: `${config.emojis.team2} TEAM 2 — \`${match.team2.length}/${match.teamSize}\``, value: t2Field, inline: true },
     { name: '⚡ STATUS', value: status || '—' }
   ];
+  // Same wording as the lobby, so the style reads identically in both places.
+  const styleText = styleLine(match);
+  if (styleText) fields.push({ name: '🎨 STYLE', value: styleText, inline: true });
   if (resultFields.length) fields.push(...resultFields);
 
   // withBanner() fills the image slot, which sits alongside the thumbnail.
