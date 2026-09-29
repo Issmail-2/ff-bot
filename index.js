@@ -782,11 +782,19 @@ function styleLabel(style) {
   return String(style).charAt(0).toUpperCase() + String(style).slice(1);
 }
 
-// A ready-made line for the two embeds that display it, so the wording is
-// identical in the lobby and the match channel.
+// Two renderings of the same value, so the wording can never disagree.
+//   styleLine    - compact, for the field row in the match channel
+//   styleHeading - a large top-of-embed heading, for the lobby
 function styleLine(match) {
   const label = styleLabel(match && match.style);
   return label ? `🎨 **Style:** ${label}` : null;
+}
+
+// '##' is Discord's only font-size control: it renders as a heading, so the style
+// reads as the headline of the lobby instead of another line of body text.
+function styleHeading(match) {
+  const label = styleLabel(match && match.style);
+  return label ? `## 🎨 ${label}` : null;
 }
 
 function buildMatchBoxEmbed(guild, match, creatorUser) {
@@ -804,19 +812,18 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const lockEmoji = match.key ? '🔒' : '🔓';
 
   const strip = slotStrip(filled1, filled2, size);
-  const styleText = styleLine(match);
+  // Heading, not a line: the style is the first thing a player reads.
+  const styleText = styleHeading(match);
 
   const embed = new EmbedBuilder()
     .setTitle(`${config.emojis.game} ${getModeConfig(mode).displayName} • ${size}v${size} LOBBY`)
     .setColor(full ? COLORS.success : COLORS.primary)
     .setDescription(
+      // The style leads when there is one, so it is the first thing read.
+      (styleText ? `${styleText}\n` : '') +
       `${strip}  **${joined}/${total}**\n` +
       `${full ? '✅ **Both teams full — starting soon**' : `⏳ **${pending}** more player${pending === 1 ? '' : 's'} needed`}\n` +
-      `🟩 Team 1  ·  ⬜ empty  ·  🟥 Team 2\n` +
-      `👑 Host <@${match.creatorId}>   ·   🕐 Opened <t:${ts}:R>` +
-      // Only amo-yes sets a style. Omitted entirely for amo-no and e-sport
-      // rather than showing an empty row.
-      (styleText ? `\n${styleText}` : '')
+      `👑 Host <@${match.creatorId}>   ·   🕐 Opened <t:${ts}:R>`
     )
     .addFields(
       { name: `${config.emojis.team1} TEAM 1  \`${filled1}/${size}\``, value: t1Field || '*No players yet*', inline: true },
