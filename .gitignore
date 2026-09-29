@@ -31,3 +31,4 @@ verify-playflow.js
 probe-option.js
 .env
 verify-lobby.js
+verify-emoji.js

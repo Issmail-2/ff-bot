@@ -8,6 +8,40 @@ if (!config.modes.amo) config.modes.amo = { name:'amo', displayName:'Custom Room
 if (!config.modes.esport) config.modes.esport = { name:'esport', displayName:'Esport', command:'!esport', matchChannelId: process.env.ESPORT_CHANNEL_ID||'1545388379309482037', voiceCategoryId: process.env.ESPORT_VOICE_CATEGORY||'1545386731686076476', logsCategoryId: process.env.ESPORT_LOGS_CATEGORY||'1545386732982374433', pointsFile:'./data/points_esport.json' };
 if (!config.matchPoints) config.matchPoints = { winner: 80, loser: 30 };
 if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705>', team1:'<a:aHYPR_GREENDOTid:1545351146770796634>', team2:'<a:aredptid:1545350890989428829>' };
+
+// The configured emoji values are sometimes bare shortcodes ("Free_fire_logo")
+// rather than full markup ("<:Free_fire_logo:1466528905509736705>"). Discord does
+// not parse shortcodes in bot messages, so the bot was posting the literal text
+// ":Free_fire_logo:" instead of the sticker. Normalise every value: keep real
+// markup, rebuild markup from the known name -> id map, and fall back to a plain
+// unicode emoji if we do not recognise it.
+// Canonical name -> id. The name is emitted verbatim because Discord emoji
+// names are case-sensitive: rebuilding markup from a lower-cased input would
+// produce "<:free_fire_logo:...>" which does not resolve.
+const EMOJI_IDS = {
+  free_fire_logo: { name: 'Free_fire_logo', id: '1466528905509736705' },
+  ahypr_greendotid: { name: 'aHYPR_GREENDOTid', id: '1545351146770796634', animated: true },
+  aredptid: { name: 'aredptid', id: '1545350890989428829' },
+  freefire: { name: 'Free_fire_logo', id: '1466528905509736705' },
+  fire: { name: 'Free_fire_logo', id: '1466528905509736705' }
+};
+const EMOJI_FALLBACK = { game: '🎮', team1: '🟢', team2: '🔴' };
+function normalizeEmoji(value, key) {
+  const v = String(value == null ? '' : value).trim();
+  if (v.startsWith('<')) return v;
+  if (v) {
+    const hit = EMOJI_IDS[v.toLowerCase()];
+    if (hit) {
+      return `<${hit.animated ? 'a' : ''}:${hit.name}:${hit.id}>`;
+    }
+    // A bare unicode emoji is fine as-is.
+    if (!/^[\w-]+$/.test(v)) return v;
+  }
+  return EMOJI_FALLBACK[key] || '';
+}
+for (const k of Object.keys(EMOJI_FALLBACK)) {
+  config.emojis[k] = normalizeEmoji(config.emojis[k], k);
+}
 if (!config.pointsFile) config.pointsFile = './data/points.json';
 if (!config.logsCategoryId) config.logsCategoryId = config.modes.amo.logsCategoryId;
 if (!config.logsChannelId) config.logsChannelId = process.env.LOGS_CHANNEL_ID || '1545366915180924938';
