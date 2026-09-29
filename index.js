@@ -11,6 +11,18 @@ if (!config.modes.esport) config.modes.esport = { name:'esport', displayName:'e-
 // mode that asks which lobby style to use.
 if (!config.modes.ammo) config.modes.ammo = { name:'ammo', displayName:'amo-yes', command:'!playyes', matchChannelId: (config.modes.amo && config.modes.amo.matchChannelId) || process.env.AMO_CHANNEL_ID || '1545315593450954762', voiceCategoryId: config.modes.amo ? config.modes.amo.voiceCategoryId : undefined, logsCategoryId: config.modes.amo ? config.modes.amo.logsCategoryId : undefined, pointsFile:'./data/points.json', requiresStyle:true };
 if (!config.matchPoints) config.matchPoints = { winner: 80, loser: 30 };
+
+// amo-no is only playable in its own channel. This is applied after the defaults
+// above (and after amo-yes has already copied its channel from amo) so that a
+// config.json on disk, or an AMO_CHANNEL_ID env var, cannot quietly point amo-no
+// somewhere else. The channel check in the picker reads matchChannelId, so this
+// is the single place the rule lives.
+const AMO_NO_CHANNEL_ID = process.env.AMO_NO_CHANNEL_ID || '1547567219167199352';
+if (config.modes.amo) {
+  config.modes.amo.matchChannelId = AMO_NO_CHANNEL_ID;
+  config.modes.amo.ammoChannelId = AMO_NO_CHANNEL_ID;
+}
+
 if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705>', team1:'<a:aHYPR_GREENDOTid:1545351146770796634>', team2:'<a:aredptid:1545350890989428829>' };
 
 // The configured emoji values are sometimes bare shortcodes rather than full
@@ -979,7 +991,10 @@ async function handlePlaySizePick(interaction) {
     // on into room details rather than making them pick again.
     if (draft.size) {
       playFlow.setDraft(userId, { style });
-      return continueToRoomDetails(interaction, draft.size, draft.mode || 'amo', label);
+      // The raw value is stored, not the label. styleLabel() turns it into text
+      // for display, so storing the label here would save "Zelika Style" where
+      // every other match has "zelika".
+      return continueToRoomDetails(interaction, draft.size, draft.mode || 'amo', style);
     }
     playFlow.setDraft(userId, { style });
     return interaction.update({
@@ -1016,12 +1031,14 @@ async function handlePlaySizePick(interaction) {
   const mode = draft.mode || 'amo';
   const modeCfg = getModeConfig(mode);
   const channelId = interaction.channel.id;
-  // All three modes share one channel, so the gate is a single id. Checking the
-  // old ammoChannelId here compared against undefined and let anything through.
+  // Each mode is hosted in its own channel, so the gate is per-mode. The old
+  // ammoChannelId compared against undefined here and let anything through.
+  // Checked again here because the player picked from a picker that may have been
+  // opened in a different channel than the one this mode requires.
   if (modeCfg.matchChannelId && channelId !== modeCfg.matchChannelId) {
     playFlow.clearDraft(userId);
     return interaction.reply({
-      content: `❌ **${modeCfg.displayName}** matches must be started in <#${modeCfg.matchChannelId}>.`,
+      content: `❌ **${modeCfg.displayName}** matches must be started in <#${modeCfg.matchChannelId}>.\nUse \`!play\` there and pick **${modeCfg.displayName}** again.`,
       flags: 64
     });
   }
@@ -1066,13 +1083,21 @@ async function continueToRoomDetails(interaction, size, mode, style) {
   if (style) match.style = style;
 
   // The picker was transient navigation, so it is removed once chosen from.
-  // The picker is a normal channel message so the host can click it, so the
-  // message itself is deleted (not an ephemeral reply).
-  if (interaction.message && interaction.message.id) {
-    await interaction.message.delete().catch(() => {});
-  } else {
-    await interaction.deleteReply().catch(() => {});
+  //
+  // The style box is posted with flags: 64, i.e. ephemeral. An ephemeral message
+  // cannot be deleted with the bot token -- it only exists under the token of the
+  // interaction that created it -- so interaction.message.delete() fails with a
+  // 404 and the box was left on screen for the rest of the session. The
+  // interaction-scoped delete is tried first, with the plain delete as fallback
+  // for a non-ephemeral picker.
+  let gone = false;
+  if (typeof interaction.deleteReply === 'function') {
+    gone = await interaction.deleteReply().then(() => true).catch(() => false);
   }
+  if (!gone && interaction.message && interaction.message.id) {
+    gone = await interaction.message.delete().then(() => true).catch(() => false);
+  }
+  if (!gone) console.log(`[PLAY] picker message ${interaction.message && interaction.message.id} survived deletion`);
 
   const parts = playFlow.buildSetupMessageParts(match, userId, interaction.guild);
   const setupMsg = await interaction.channel.send(parts).catch(() => null);
@@ -3102,17 +3127,21 @@ client.on(Events.MessageCreate, async (message) => {
   if (lowercase.startsWith('!play') || lowercase.startsWith('!esport')) {
     const isEsport = lowercase.startsWith('!esport');
     const mode = isEsport ? 'esport' : 'amo';
-    const modeCfg = getModeConfig(mode);
 
     if (isEsport) {
       await ensureEsportChannels(message.guild);
     }
 
-    // Every mode is hosted in the same channel, so there is one id to check and
-    // nothing to interpolate that could render as "<#undefined>".
-    const matchChannelId = modeCfg.matchChannelId;
-    if (matchChannelId && message.channel.id !== matchChannelId) {
-      return message.reply(`❌ Please use \`${modeCfg.command}\` in <#${matchChannelId}> to host a **${modeCfg.displayName}** match.`);
+    // Each mode has its own channel and !play opens a picker offering all of
+    // them, so the command is accepted in ANY mode channel. The per-mode rule
+    // is applied when a mode is actually chosen. Gating here on the mode that
+    // "!play" defaults to (amo-no) would lock players out of hosting amo-yes
+    // and e-sport in their own channels entirely.
+    const hostable = [...new Set(
+      Object.values(config.modes).map(m => m && m.matchChannelId).filter(Boolean)
+    )];
+    if (hostable.length && !hostable.includes(message.channel.id)) {
+      return message.reply(`⚠️ Host a match in ${hostable.map(id => `<#${id}>`).join(', ')}.`);
     }
 
     const existing = manager.getMatchByCreator(message.author.id, mode);
