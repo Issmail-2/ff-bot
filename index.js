@@ -1270,10 +1270,22 @@ async function handleVoteCancel(interaction, match) {
 }
 
 async function handleCancelMatchAction(interaction, match) {
-  if (match.status === 'waiting' || match.status === 'full') {
-    return openCancelVote(interaction.guild, match, interaction);
+  if (match.status !== 'waiting' && match.status !== 'full') {
+    return interaction.reply({ content: '⚠️ This match is not open for a cancel vote right now.', ephemeral: true });
   }
-  return interaction.reply({ content: '⚠️ This match is not open for a cancel vote right now.', ephemeral: true });
+  // Only the host who opened the match, or staff, can cancel it. Discord renders
+  // the button for everyone, so this is the only place the rule can be enforced.
+  const isHost = isMatchHost(match, interaction.user.id);
+  const isStaff = interaction.member.permissions.has('Administrator') ||
+    [...(config.staffRoles || []), ...(config.adminRoles || [])]
+      .some(rid => interaction.member.roles.cache.has(rid));
+  if (!isHost && !isStaff) {
+    return interaction.reply({
+      content: `❌ Only the match host <@${match.creatorId}> can cancel this match.\nIf they are not around, ask a staff member to cancel it.`,
+      flags: 64
+    });
+  }
+  return openCancelVote(interaction.guild, match, interaction);
 }
 
 async function handleStaffCancel(interaction, match) {
@@ -1638,11 +1650,14 @@ function buildMatchButtons(match, userId) {
   ];
 
   if (match.status === 'waiting') {
+    // Discord components render once for everyone, so this cannot be hidden from
+    // non-hosts here -- it is enforced when the button is pressed. The label says
+    // who it is for so nobody wastes a click.
     secondary.push(
       new ButtonBuilder()
         .setCustomId(`cancel_${match.id}`)
         .setEmoji('❌')
-        .setLabel('Cancel Match')
+        .setLabel('Cancel Match (Host)')
         .setStyle(ButtonStyle.Danger)
     );
   }
