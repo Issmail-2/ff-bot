@@ -9,7 +9,7 @@ const {
   TextInputStyle,
   ButtonStyle
 } = require('discord.js');
-const { COLORS, BRANDING, withThumbnail } = require('./ui');
+const { COLORS, BRANDING, STICKERS, withThumbnail } = require('./ui');
 
 const TEAM_SIZES = [2, 3, 4];
 const EXPIRY_MS = 5 * 60 * 1000;
@@ -63,12 +63,17 @@ const STYLE_CUSTOM_ID = `${CUSTOM_ID}_style`;
 
 function buildStylePicker(userId, guild, size) {
   const embed = withThumbnail(new EmbedBuilder()
-    .setTitle(`${'🎨'} Pick a Style • ${size}v${size}`)
+    .setTitle(`${STICKERS.game} Pick a Style - ${sizeLabel(size)}`)
     .setColor(COLORS.gold)
     .setDescription(
-      `Nice one, <@${userId}>! Last step — pick the style for your **${sizeLabel(size)}** lobby.\n` +
-      `After this you'll enter your room ID and passwords.`
+      `Nice one, <@${userId}>! Pick the style for your **${sizeLabel(size)}** **amo-yes** lobby.\n` +
+      `Next you'll enter your room ID and passwords.`
     )
+    .addFields({ name: `${STICKERS.team1}${STICKERS.team2} What happens next`, value: [
+      'Pick a style here.',
+      'Then a form asks for your **Room ID** (required).',
+      '**Room Password** and **Join Password** are optional - leave them empty if you have none.'
+    ].join('\n'), inline: false })
     .setFooter({ text: BRANDING }), guild);
 
   const row = new ActionRowBuilder().addComponents(
@@ -95,7 +100,7 @@ function buildSizePicker(userId, guild, opts = {}) {
   const modeLabel = MODES.find(m => m.value === currentMode).label.split('—')[0].trim();
 
   const embed = withThumbnail(new EmbedBuilder()
-    .setTitle(`${'🎮'} Host a Match`)
+    .setTitle(`${STICKERS.game} Host a Match`)
     .setColor(COLORS.primary)
     .setDescription(
       `Hey <@${userId}> — pick a **mode** and a **team size**, then enter your room details.\n\n` +
@@ -153,7 +158,7 @@ function buildRoomModal(match) {
     // auto-joins the host to Team 1, posts the lobby embed and arms the join
     // timeout. One code path for both !play and /play.
     .setCustomId(`roommodal_${match.id}`)
-    .setTitle(`🏠 ${match.teamSize}v${match.teamSize} Room Details`);
+    .setTitle(`${STICKERS.game} Room Details ${sizeLabel(match.teamSize)}`);
 
   // Room ID is the one field the player must supply. Free Fire room IDs are
   // numeric, and it is what opponents need to actually connect.
@@ -199,7 +204,7 @@ function buildRoomModal(match) {
 function buildSetupMessageParts(match, hostId, guild) {
   const ts = Math.floor(Date.now() / 1000);
   const embed = withThumbnail(new EmbedBuilder()
-    .setTitle(`${'🎮'} Match Setup • ${sizeLabel(match.teamSize)}`)
+    .setTitle(`${STICKERS.game} Match Setup ${sizeLabel(match.teamSize)}`)
     .setColor(COLORS.neutral)
     .setDescription(
       `**Host** — <@${hostId}>\n` +

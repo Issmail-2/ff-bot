@@ -24,6 +24,54 @@ const COLORS = {
   dark:    0x2B2D31
 };
 
+// ---------------------------------------------------------------------------
+// Server stickers.
+//
+// The configured emoji values are sometimes bare shortcodes ("Free_fire_logo")
+// rather than full markup ("<:Free_fire_logo:1466528905509736705>"). Discord does
+// not parse shortcodes in bot messages, so the bot was posting the literal text
+// ":Free_fire_logo:" instead of the sticker.
+//
+// The canonical map stores the exact casing because Discord emoji names are
+// case-sensitive: rebuilding markup from a lower-cased input produces
+// ":free_fire_logo:", which resolves to nothing.
+// ---------------------------------------------------------------------------
+const EMOJI_IDS = {
+  free_fire_logo: { name: 'Free_fire_logo', id: '1466528905509736705' },
+  ahypr_greendotid: { name: 'aHYPR_GREENDOTid', id: '1545351146770796634', animated: true },
+  aredptid: { name: 'aredptid', id: '1545350890989428829' },
+  freefire: { name: 'Free_fire_logo', id: '1466528905509736705' },
+  fire: { name: 'Free_fire_logo', id: '1466528905509736705' }
+};
+const EMOJI_FALLBACK = { game: '🎮', team1: '🟢', team2: '🔴' };
+
+function normalizeEmoji(value, key) {
+  const v = String(value == null ? '' : value).trim();
+  if (v.startsWith('<')) return v;
+  if (v) {
+    const hit = EMOJI_IDS[v.toLowerCase()];
+    if (hit) return `<${hit.animated ? 'a' : ''}:${hit.name}:${hit.id}>`;
+    // A bare unicode emoji is fine as-is.
+    if (!/^[\w-]+$/.test(v)) return v;
+  }
+  return EMOJI_FALLBACK[key] || '';
+}
+
+// Reads config.json the same way the rest of the bot does and returns a
+// ready-to-use sticker set, so every module can render the same artwork.
+function loadStickers() {
+  let config = {};
+  try { config = require('../config.json'); } catch { config = {}; }
+  const raw = config.emojis || {};
+  return {
+    game: normalizeEmoji(raw.game, 'game'),
+    team1: normalizeEmoji(raw.team1, 'team1'),
+    team2: normalizeEmoji(raw.team2, 'team2')
+  };
+}
+
+const STICKERS = loadStickers();
+
 const BRANDING = '© Avengers Server • All Rights Reserved';
 
 function progressBar(current, total, size = 8) {
@@ -68,4 +116,7 @@ function withThumbnail(embed, guild) {
   return embed;
 }
 
-module.exports = { COLORS, BRANDING, progressBar, slotStrip, divider, createEmbed, withThumbnail };
+module.exports = {
+  COLORS, BRANDING, STICKERS, normalizeEmoji,
+  progressBar, slotStrip, divider, createEmbed, withThumbnail
+};
