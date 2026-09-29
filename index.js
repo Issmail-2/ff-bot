@@ -17,7 +17,7 @@ if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705
 // markup, which Discord renders as literal text. normalizeEmoji() now lives in
 // utils/ui so every module shares one definition of the sticker set.
 const { normalizeEmoji } = require('./utils/ui');
-for (const k of Object.keys(EMOJI_FALLBACK)) {
+for (const k of ['game', 'team1', 'team2']) {
   config.emojis[k] = normalizeEmoji(config.emojis[k], k);
 }
 if (!config.pointsFile) config.pointsFile = './data/points.json';
