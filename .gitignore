@@ -30,3 +30,4 @@ verify-ui.js
 verify-playflow.js
 probe-option.js
 .env
+verify-lobby.js

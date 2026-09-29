@@ -703,20 +703,29 @@ async function ensureEsportChannels(guild) {
 }
 
 
+// One line per slot. Filled slots show the player, their rank badge and their
+// points, so the lobby is informative at a glance instead of a bare list of
+// names. Empty slots stay visible so both teams are the same height and the
+// remaining places are obvious.
 function teamPanel(ids, matchMode, size, guild) {
-  return Array.from({ length: size || ids.length }, (_, i) => {
+  const slots = size || ids.length || 1;
+  return Array.from({ length: slots }, (_, i) => {
     const uid = ids[i];
-    if (!uid) return `${i + 1}. ▫️ *Empty slot*`;
+    if (!uid) return `\`${i + 1}.\` ▫️ *empty*`;
+    const isMock = !/^\d{15,20}$/.test(uid);
     const badge = storage.getRankBadge(uid, matchMode);
-    const lead = i === 0 ? '👑' : `${i + 1}.`;
-    let name = 'User';
-    if (guild && /^\d{15,20}$/.test(uid)) {
+    let name = isMock ? 'Mock' : 'User';
+    if (guild && !isMock) {
       const member = guild.members.cache.get(uid);
       if (member) name = member.displayName || member.user.username;
-    } else if (!/^\d{15,20}$/.test(uid)) {
-      name = '🤖 Mock';
     }
-    return `${lead} ${name}${badge ? ` \`[${badge}]\`` : ''}`;
+    const who = isMock ? `🤖 **${name}**` : `<@${uid}>`;
+    const pts = isMock ? '' : (storage.getPlayerPoints(uid, matchMode).totalPoints || 0);
+    const rank = badge ? ` \`${badge}\`` : '';
+    const score = pts ? ` · ${fmtNum(pts)} pts` : '';
+    // The captain (first slot) is who captains that team in the MVP vote.
+    const cap = i === 0 ? ' 👑' : '';
+    return `\`${i + 1}.\` ${who}${cap}${rank}${score}`;
   }).join('\n');
 }
 
@@ -766,23 +775,39 @@ function buildMatchBoxEmbed(guild, match, creatorUser) {
   const joined = filled1 + filled2;
   const pending = Math.max(0, total - joined);
   const ts = Math.floor(Date.now() / 1000);
+  const full = pending === 0;
+  const lockEmoji = match.key ? '🔒' : '🔓';
+
+  const bar = progressBar(joined, total, 10);
 
   const embed = new EmbedBuilder()
-    .setTitle(`${config.emojis.game} Team Selection • ${size}v${size}`)
-    .setColor(COLORS.primary)
+    .setTitle(`${config.emojis.game} ${getModeConfig(mode).displayName} • ${size}v${size} LOBBY`)
+    .setColor(full ? COLORS.success : COLORS.primary)
     .setDescription(
-      `**Host** — <@${match.creatorId}>\n` +
-      `**Slots** — \`${joined}/${total}\` filled${pending === 0 ? ' • ✅ Match full' : ` • ⏳ ${pending} waiting`}\n` +
-      `**Started** — <t:${ts}:R>`
+      `${bar}\n` +
+      `**${joined}/${total}** players joined${full ? ' • ✅ **Full — starting soon**' : ` • ⏳ **${pending}** still needed`}\n` +
+      `👑 Host: <@${match.creatorId}>   •   🕐 Opened <t:${ts}:R>`
     )
     .addFields(
-      { name: `${config.emojis.team1} TEAM 1 — \`${filled1}/${size}\``, value: t1Field || '*No players yet*', inline: true },
-      { name: `${config.emojis.team2} TEAM 2 — \`${filled2}/${size}\``, value: t2Field || '*No players yet*', inline: true }
+      { name: `${config.emojis.team1} TEAM 1  \`${filled1}/${size}\``, value: t1Field || '*No players yet*', inline: true },
+      { name: `${config.emojis.team2} TEAM 2  \`${filled2}/${size}\``, value: t2Field || '*No players yet*', inline: true }
+    )
+    .addFields(
+      { name: '🎮 How to join', value: [
+        'Press **Join Team 1** or **Join Team 2** below.',
+        'You can **Leave** at any time before the match starts.',
+        full ? 'The match starts as soon as both teams are full.' : `This lobby closes in <t:${Math.floor(Date.now() / 1000) + 120}:R>.`
+      ].join('\n'), inline: false },
+      { name: '🔑 Access', value: [
+        `${lockEmoji} ${match.key ? '**Join key required** to enter.' : '**Open to everyone** — no key needed.'}`,
+        '👑 The **first player** on each team captains the MVP vote.'
+      ].join('\n'), inline: false }
     )
     .setFooter({ text: BRANDING });
 
-  return embed;
+  return withThumbnail(embed, guild);
 }
+
 
 async function updateMatchChannel(guild, match) {
   const channel = guild.channels.cache.get(match.channelId2);
@@ -1454,7 +1479,12 @@ async function startFullMatch(guild, match) {
     if (ch && match.message) {
       const msg = await ch.messages.fetch(match.message).catch(() => null);
       if (msg) {
-        await msg.edit({ embeds: [buildMatchBoxEmbed(guild, match, null)], components: buildMatchButtons(guild, match, client.user.id)[0] }).catch(() => {});
+        // Pass both rows through, not just the first: the join buttons and the
+        // leave/cancel actions live on separate rows now.
+        await msg.edit({
+          embeds: [buildMatchBoxEmbed(guild, match, null)],
+          components: buildMatchButtons(match, client.user.id)
+        }).catch(() => {});
       }
     }
     await syncJoinButtons(guild, match);
@@ -1515,38 +1545,51 @@ async function startFullMatch(guild, match) {
 }
 
 function buildMatchButtons(match, userId) {
+  const n1 = match.team1 ? match.team1.length : 0;
+  const n2 = match.team2 ? match.team2.length : 0;
+  const size = match.teamSize || 2;
+  const full1 = n1 >= size;
+  const full2 = n2 >= size;
+
+  // Join buttons are the primary action, so they get their own row and both stay
+  // green. A full team greys out instead of letting a player click straight into
+  // a rejection.
   const joinTeam1 = new ButtonBuilder()
     .setCustomId(`join1_${match.id}`)
     .setEmoji(config.emojis.team1)
-    .setLabel(`Join Team 1 (${match.team1 ? match.team1.length : 0}/${match.teamSize})`)
-    .setStyle(ButtonStyle.Primary);
+    .setLabel(full1 ? `Team 1 — Full (${n1}/${size})` : `Join Team 1 (${n1}/${size})`)
+    .setStyle(ButtonStyle.Success)
+    .setDisabled(full1);
 
   const joinTeam2 = new ButtonBuilder()
     .setCustomId(`join2_${match.id}`)
     .setEmoji(config.emojis.team2)
-    .setLabel(`Join Team 2 (${match.team2 ? match.team2.length : 0}/${match.teamSize})`)
-    .setStyle(ButtonStyle.Secondary);
+    .setLabel(full2 ? `Team 2 — Full (${n2}/${size})` : `Join Team 2 (${n2}/${size})`)
+    .setStyle(ButtonStyle.Success)
+    .setDisabled(full2);
 
-  const buttons = [joinTeam1, joinTeam2];
+  const joinRow = new ActionRowBuilder().addComponents(joinTeam1, joinTeam2);
 
-  buttons.push(
+  const secondary = [
     new ButtonBuilder()
       .setCustomId(`leave_${match.id}`)
+      .setEmoji('🚪')
       .setLabel('Leave')
       .setStyle(ButtonStyle.Secondary)
-  );
+  ];
 
   if (match.status === 'waiting') {
-    buttons.push(
+    secondary.push(
       new ButtonBuilder()
         .setCustomId(`cancel_${match.id}`)
+        .setEmoji('❌')
         .setLabel('Cancel Match')
         .setStyle(ButtonStyle.Danger)
     );
   }
 
-  const row = new ActionRowBuilder().addComponents(buttons);
-  return [row];
+  const actionRow = new ActionRowBuilder().addComponents(secondary);
+  return [joinRow, actionRow];
 }
 
 async function syncJoinButtons(guild, match) {
