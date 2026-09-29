@@ -14,17 +14,22 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'Issmail-2/ff-bot'
     steps:
+      - name: Check Railway credentials are present
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set on this repository."
+            echo "Add it at: Settings -> Secrets and variables -> Actions -> New repository secret"
+            echo "Create the token at: https://railway.com/account/tokens (Project scope for ff-bot)"
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN is present (${#RAILWAY_TOKEN} chars)"
+
       - uses: actions/checkout@v4
 
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Link project
-        run: railway link --project "sincere-cooperation" --environment production
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-
-      - name: Deploy ff-bot
-        run: railway up --ci --service ff-bot
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Deploy to Railway
+        uses: railwayapp/railway-github-action@v1
+        with:
+          railwayToken: ${{ secrets.RAILWAY_TOKEN }}
+          service: ff-bot
