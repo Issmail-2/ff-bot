@@ -27,5 +27,6 @@ verify-storage.js
 verify-invites.js
 verify-matches.js
 verify-ui.js
+verify-playflow.js
 probe-option.js
 .env

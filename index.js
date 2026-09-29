@@ -84,6 +84,8 @@ const cheaterReports = require('./utils/cheaterReports');
 const { COLORS, BRANDING, progressBar, divider, withThumbnail } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
 const inviteTracker = require('./utils/invites');
+const slash = require('./utils/slash');
+const playFlow = require('./utils/playFlow');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
@@ -392,7 +394,8 @@ The **#1 ranked player** automatically receives the Role #1 role.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
-\`!play 2v2 | 3v3 | 4v4\` — host a match
+\`/play\` — **host a match** (new!) pick 2v2/3v3/4v4 from a menu, then enter your room details
+\`!play 2v2 | 3v3 | 4v4\` — host a match (text command)
 \`!esport 2v2 | 3v3 | 4v4\` — host an esport match
 \`!leaderboard\` — show the top players
 \`!cancelmatch\` — cancel the match you opened (works in any channel)
@@ -880,6 +883,145 @@ function cancelVotesNeeded(match) {
 
 function isMatchHost(match, userId) {
   return !!match && match.creatorId === userId;
+}
+
+// ---------------------------------------------------------------------------
+// /play - slash command flow.
+//
+// Step 1: the player runs /play, the bot replies with a team-size picker that
+//         only they can see.
+// Step 2: they choose 2v2/3v3/4v4, the picker message is deleted, a match is
+//         created and saved, and they are asked for the room details.
+// Step 3: a modal asks for the Room ID (required, numeric) plus the room
+//         password and the join password (both optional).
+// ---------------------------------------------------------------------------
+const SLASH_COMMANDS = [
+  {
+    name: 'play',
+    description: 'Host a match — pick 2v2, 3v3 or 4v4',
+    options: [
+      {
+        name: 'mode',
+        description: 'Which queue to host in',
+        type: 3,
+        required: false,
+        choices: [
+          { name: 'Custom Room', value: 'amo' },
+          { name: 'Esport', value: 'esport' }
+        ]
+      }
+    ]
+  }
+];
+
+async function startPlayDraft(interaction) {
+  const guild = interaction.guild;
+  const userId = interaction.user.id;
+
+  // Channel gate: /play only counts inside the channel that mode is hosted in.
+  const mode = (interaction.options && interaction.options.getString('mode')) || 'amo';
+  const modeCfg = getModeConfig(mode);
+  const matchChannelId = modeCfg.matchChannelId;
+  const ammoChannelId = modeCfg.ammoChannelId;
+  if (mode === 'amo' && ammoChannelId && interaction.channel.id !== ammoChannelId && interaction.channel.id !== matchChannelId) {
+    return interaction.reply({
+      content: `❌ Use \`/play\` in <#${matchChannelId}> to host a **${modeCfg.displayName}** match.`,
+      flags: 64
+    });
+  }
+  if (mode === 'esport' && interaction.channel.id !== matchChannelId) {
+    return interaction.reply({
+      content: `❌ Use \`/play\` in <#${matchChannelId}> to host a **${modeCfg.displayName}** match.`,
+      flags: 64
+    });
+  }
+
+  if (!isInRequiredVoice(interaction.member)) {
+    return interaction.reply({ content: voiceCheckMessage(), flags: 64 });
+  }
+
+  const bl = blacklistModule.isBlacklisted(userId);
+  if (bl) {
+    return interaction.reply({ content: blacklistMessage(bl), flags: 64 });
+  }
+
+  const existing = manager.getMatchByCreator(userId, mode);
+  if (existing) {
+    return interaction.reply({
+      content: '❌ You already have a pending match! Cancel it first.',
+      flags: 64
+    });
+  }
+
+  playFlow.setDraft(userId, { mode });
+  return interaction.reply({
+    ...playFlow.buildSizePicker(userId, guild),
+    flags: 64
+  });
+}
+
+async function handlePlaySizePick(interaction) {
+  const userId = interaction.user.id;
+  const draft = playFlow.getDraft(userId);
+  if (!draft) {
+    return interaction.reply({
+      content: '❌ That request expired. Run `/play` again to start a new one.',
+      flags: 64
+    });
+  }
+
+  const size = parseInt(interaction.values[0], 10);
+  if (!playFlow.TEAM_SIZES.includes(size)) {
+    return interaction.reply({ content: '⚠️ Unknown team size.', flags: 64 });
+  }
+
+  const mode = draft.mode || 'amo';
+  const modeCfg = getModeConfig(mode);
+  const channelId = interaction.channel.id;
+  if (channelId !== modeCfg.matchChannelId && channelId !== modeCfg.ammoChannelId) {
+    playFlow.clearDraft(userId);
+    return interaction.reply({ content: '❌ Wrong channel for this match.', flags: 64 });
+  }
+
+  // Create the match first, so if the modal fails the player can still retry
+  // from the setup message rather than losing their slot.
+  const match = manager.createMatch(userId, size, channelId, mode);
+
+  // The picker was transient navigation, so it is removed once chosen from.
+  await interaction.deleteReply().catch(() => {});
+
+  const parts = playFlow.buildSetupMessageParts(match, userId, interaction.guild);
+  const setupMsg = await interaction.channel.send(parts).catch(() => null);
+  if (setupMsg) {
+    // Tracked as the match's active message, not just a setup marker: the
+    // channel cleanup sweep deletes bot messages that are not an active match
+    // message, and the modal handler reuses this id when it swaps in the real
+    // lobby embed. So this message is both saved and replaceable.
+    match.setupMessageId = setupMsg.id;
+    match.message = setupMsg.id;
+  }
+  manager.persistMatches();
+
+  // Arm the config timeout, and open the modal immediately so the player does
+  // not have to press a button to continue.
+  if (match.configTimeout) clearTimeout(match.configTimeout);
+  match.configTimeout = setTimeout(() => {
+    timeoutMatch(interaction.guild, match.id, 'config');
+  }, 60 * 1000);
+
+  try {
+    await interaction.showModal(playFlow.buildRoomModal(match));
+    playFlow.clearDraft(userId);
+    return;
+  } catch (e) {
+    errLog('playFlow showModal failed for match ' + match.id, e);
+    // Modal could not open. The setup message stays up with a button so the
+    // player can retry instead of being stuck.
+    return interaction.followUp({
+      content: '❌ I could not open the room details form. Use **⚙️ Enter Room Details** below to try again.',
+      flags: 64
+    }).catch(() => {});
+  }
 }
 
 function isMatchPlayer(match, userId) {
@@ -2626,6 +2768,14 @@ client.once(Events.ClientReady, async (c) => {
     }
   }
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
+  // Register slash commands. registerGlobal() caches the payload and skips the
+  // API call when nothing changed, so restarts do not burn Discord's hourly
+  // bulk-overwrite rate limit budget.
+  slash.registerGlobal(c, SLASH_COMMANDS).then(r => {
+    if (r && r.skipped) console.log('[SLASH] using cached command set');
+    else if (r && r.ok) console.log(`[SLASH] /play ready (${r.count} command(s))`);
+    else console.log('[SLASH] registration failed:', r && r.error);
+  }).catch(e => console.log('[SLASH] registration error:', e.message));
   postCommandsInfoWithRetry();
   const runEnsure = async (g) => {
     try { await ensureCheaterChannels(g); } catch (e) { console.log(`[CHEAT] ensure error: ${e.message}`); }
@@ -2721,6 +2871,12 @@ setInterval(() => {
   } catch (e) {
     console.log('[SELF-HEAL] sweep error:', e.message);
   }
+  // Drop abandoned /play drafts so a user who closed the picker cannot leave
+  // an entry behind.
+  try {
+    const n = playFlow.draftCount();
+    if (n) console.log(`[PLAY] ${n} pending /play draft(s) still open`);
+  } catch (e) { /* ignore */ }
 }, 5 * 60 * 1000);
 
 client.on(Events.MessageCreate, async (message) => {
@@ -3069,6 +3225,26 @@ async function performJoin(interaction, match, team) {
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  // /play and any future slash commands. Handled before the button/modal
+  // routing below so a chat-input command never falls through to it.
+  if (interaction.isChatInputCommand()) {
+    try {
+      if (interaction.commandName === 'play') {
+        return await startPlayDraft(interaction);
+      }
+      return await interaction.reply({ content: '⚠️ Unknown command.', flags: 64 });
+    } catch (e) {
+      errLog(`slash command error (${interaction.commandName}):`, e);
+      try {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply('❌ Something went wrong. Please try again.');
+        } else {
+          await interaction.reply({ content: '❌ Something went wrong. Please try again.', flags: 64 });
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
   try {
     console.log(`[IN] ${new Date().toISOString()} type=${interaction.type} cid=${interaction.isCommand() ? interaction.commandName : (interaction.customId || '')} user=${interaction.user ? interaction.user.id : ''} ch=${interaction.channelId}`);
     if (interaction.isButton() && interaction.customId === 'apply_start_checker') {
@@ -3128,8 +3304,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.log('[MODAL] deferred reply OK');
 
     const roomId = interaction.fields.getTextInputValue('roomIdInput').trim();
-    const password = interaction.fields.getTextInputValue('passwordInput').trim();
-    const matchKey = interaction.fields.getTextInputValue('keyInput').trim();
+    // The room password and the join password are both genuinely optional --
+    // a custom room may have neither. Empty is a valid answer, not a failure,
+    // so they are only format-checked when the player actually typed one.
+    const passwordRaw = interaction.fields.getTextInputValue('passwordInput').trim();
+    const keyRaw = interaction.fields.getTextInputValue('keyInput').trim();
+    const password = passwordRaw || '';
+    const matchKey = keyRaw || '';
 
     if (![2, 3, 4].includes(match.teamSize)) {
       console.log('[MODAL] invalid team size on match', match.teamSize);
@@ -3138,8 +3319,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const invalidFields = [];
     if (!/^\d+$/.test(roomId)) invalidFields.push('Room ID');
-    if (!/^\d+$/.test(password)) invalidFields.push('Room Password');
-    if (matchKey && !/^\d+$/.test(matchKey)) invalidFields.push('Join Key');
+    if (password && !/^\d+$/.test(password)) invalidFields.push('Room Password');
+    if (matchKey && !/^\d+$/.test(matchKey)) invalidFields.push('Join Password');
     if (invalidFields.length) {
       console.log(`[MODAL] non-numeric input rejected: ${invalidFields.join(', ')}`);
       return interaction.editReply({ content: `❌ **Only numbers!** ${invalidFields.join(', ')} must contain numbers only.` });
@@ -3148,8 +3329,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     match.roomId = roomId;
     match.password = password;
     match.key = matchKey;
-    match.team1.push(interaction.user.id);
-    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password} key=${matchKey} creator auto-joined T1`);
+    if (!(match.team1 || []).includes(interaction.user.id)) {
+      match.team1.push(interaction.user.id);
+    }
+    playFlow.clearDraft(interaction.user.id);
+    console.log(`[MODAL] teamSize=${match.teamSize} roomId=${roomId} pass=${password || '(none)'} key=${matchKey || '(none)'} creator auto-joined T1`);
 
     try {
       const matchEmbed = buildMatchBoxEmbed(interaction.guild, match, interaction.user);
@@ -3161,12 +3345,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const newMsg = await channel.send({ embeds: [matchEmbed] });
       match.message = newMsg.id;
+      match.setupMessageId = null;
       manager.persistMatches();
       await syncJoinButtons(interaction.guild, match);
       console.log('[MODAL] match box sent successfully, new msg id:', newMsg.id);
 
+      const saved = [
+        `🔑 **Room ID**  \`${roomId}\``,
+        password ? `🔒 **Room Password**  \`${password}\`` : '🔓 **No room password**',
+        matchKey ? `🗝️ **Join Password**  \`${matchKey}\`` : '🔓 **Open to everyone**'
+      ].join('\n');
       await interaction.editReply({
-        content: '✅ Room config saved.'
+        embeds: [withThumbnail(new EmbedBuilder()
+          .setTitle('✅ Room details saved')
+          .setColor(COLORS.success)
+          .setDescription(`${saved}\n\nYour lobby is live — players can now join their teams.`)
+          .setFooter({ text: BRANDING }), interaction.guild)]
       }).catch(() => {});
       if (match.configTimeout) {
         clearTimeout(match.configTimeout);
@@ -3210,6 +3404,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // The moderation submenu shares this handler; both prefixes resolve the
     // same match and then dispatch on the selected value.
+    if (cid === playFlow.CUSTOM_ID) {
+      return handlePlaySizePick(interaction);
+    }
+
     if (cid.startsWith('matchmenu_') || cid.startsWith('matchmodmenu_')) {
       const prefix = cid.startsWith('matchmodmenu_') ? 'matchmodmenu_' : 'matchmenu_';
       const mId = cid.slice(prefix.length);
