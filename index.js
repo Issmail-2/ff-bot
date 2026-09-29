@@ -394,9 +394,8 @@ The **#1 ranked player** automatically receives the Role #1 role.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
-\`/play\` — **host a match** (new!) pick 2v2/3v3/4v4 from a menu, then enter your room details
-\`!play\` — same thing: opens a menu to choose 2v2/3v3/4v4
-\`!play 2v2 | 3v3 | 4v4\` — host a match directly (old way, still works)
+\`!play\` — **host a match**: opens a menu to choose 2v2/3v3/4v4, then asks for your room ID
+\`!play 2v2 | 3v3 | 4v4\` — host a match directly
 \`!esport 2v2 | 3v3 | 4v4\` — host an esport match
 \`!leaderboard\` — show the top players
 \`!cancelmatch\` — cancel the match you opened (works in any channel)
@@ -887,86 +886,20 @@ function isMatchHost(match, userId) {
 }
 
 // ---------------------------------------------------------------------------
-// /play - slash command flow.
+// Team-size picker flow, reached from a bare `!play`.
 //
-// Step 1: the player runs /play, the bot replies with a team-size picker that
-//         only they can see.
-// Step 2: they choose 2v2/3v3/4v4, the picker message is deleted, a match is
-//         created and saved, and they are asked for the room details.
-// Step 3: a modal asks for the Room ID (required, numeric) plus the room
+// Step 1: the player types !play, the bot posts a 2v2/3v3/4v4 picker.
+// Step 2: they choose a size, the picker is deleted, a match is created and
+//         saved, and a modal asks for the room details.
+// Step 3: the modal collects the Room ID (required, numeric) plus the room
 //         password and the join password (both optional).
 // ---------------------------------------------------------------------------
-const SLASH_COMMANDS = [
-  {
-    name: 'play',
-    description: 'Host a match — pick 2v2, 3v3 or 4v4',
-    options: [
-      {
-        name: 'mode',
-        description: 'Which queue to host in',
-        type: 3,
-        required: false,
-        choices: [
-          { name: 'Custom Room', value: 'amo' },
-          { name: 'Esport', value: 'esport' }
-        ]
-      }
-    ]
-  }
-];
-
-async function startPlayDraft(interaction) {
-  const guild = interaction.guild;
-  const userId = interaction.user.id;
-
-  // Channel gate: /play only counts inside the channel that mode is hosted in.
-  const mode = (interaction.options && interaction.options.getString('mode')) || 'amo';
-  const modeCfg = getModeConfig(mode);
-  const matchChannelId = modeCfg.matchChannelId;
-  const ammoChannelId = modeCfg.ammoChannelId;
-  if (mode === 'amo' && ammoChannelId && interaction.channel.id !== ammoChannelId && interaction.channel.id !== matchChannelId) {
-    return interaction.reply({
-      content: `❌ Use \`/play\` in <#${matchChannelId}> to host a **${modeCfg.displayName}** match.`,
-      flags: 64
-    });
-  }
-  if (mode === 'esport' && interaction.channel.id !== matchChannelId) {
-    return interaction.reply({
-      content: `❌ Use \`/play\` in <#${matchChannelId}> to host a **${modeCfg.displayName}** match.`,
-      flags: 64
-    });
-  }
-
-  if (!isInRequiredVoice(interaction.member)) {
-    return interaction.reply({ content: voiceCheckMessage(), flags: 64 });
-  }
-
-  const bl = blacklistModule.isBlacklisted(userId);
-  if (bl) {
-    return interaction.reply({ content: blacklistMessage(bl), flags: 64 });
-  }
-
-  const existing = manager.getMatchByCreator(userId, mode);
-  if (existing) {
-    return interaction.reply({
-      content: '❌ You already have a pending match! Cancel it first.',
-      flags: 64
-    });
-  }
-
-  playFlow.setDraft(userId, { mode });
-  return interaction.reply({
-    ...playFlow.buildSizePicker(userId, guild),
-    flags: 64
-  });
-}
-
 async function handlePlaySizePick(interaction) {
   const userId = interaction.user.id;
   const draft = playFlow.getDraft(userId);
   if (!draft) {
     return interaction.reply({
-      content: '❌ That request expired. Run `/play` again to start a new one.',
+      content: '❌ That request expired. Type `!play` again to start a new one.',
       flags: 64
     });
   }
@@ -1005,8 +938,8 @@ async function handlePlaySizePick(interaction) {
   const match = manager.createMatch(userId, size, channelId, mode);
 
   // The picker was transient navigation, so it is removed once chosen from.
-  // For /play the picker is an ephemeral reply (deleteReply). For !play it is a
-  // normal channel message (delete the message itself).
+  // The picker is a normal channel message so the host can click it, so the
+  // message itself is deleted (not an ephemeral reply).
   if (interaction.message && interaction.message.id) {
     await interaction.message.delete().catch(() => {});
   } else {
@@ -2791,14 +2724,13 @@ client.once(Events.ClientReady, async (c) => {
     }
   }
   c.user.setActivity('Free Fire | !play 2v2/3v3/4v4', { type: 3 });
-  // Register slash commands. registerGlobal() caches the payload and skips the
-  // API call when nothing changed, so restarts do not burn Discord's hourly
-  // bulk-overwrite rate limit budget.
-  slash.registerGlobal(c, SLASH_COMMANDS).then(r => {
-    if (r && r.skipped) console.log('[SLASH] using cached command set');
-    else if (r && r.ok) console.log(`[SLASH] /play ready (${r.count} command(s))`);
-    else console.log('[SLASH] registration failed:', r && r.error);
-  }).catch(e => console.log('[SLASH] registration error:', e.message));
+  // An earlier version registered a /play slash command. It has been removed,
+  // so clear the global command set once -- otherwise Discord keeps showing a
+  // command the bot no longer answers. A failure here is not fatal.
+  slash.clearGlobal(c).then(r => {
+    if (r && r.ok) console.log('[SLASH] global command set cleared');
+    else if (r && r.error) console.log('[SLASH] clear failed (harmless):', r.error);
+  }).catch(e => console.log('[SLASH] clear error (harmless):', e.message));
   postCommandsInfoWithRetry();
   const runEnsure = async (g) => {
     try { await ensureCheaterChannels(g); } catch (e) { console.log(`[CHEAT] ensure error: ${e.message}`); }
@@ -2894,11 +2826,11 @@ setInterval(() => {
   } catch (e) {
     console.log('[SELF-HEAL] sweep error:', e.message);
   }
-  // Drop abandoned /play drafts so a user who closed the picker cannot leave
-  // an entry behind.
+  // Drop abandoned !play drafts so a host who closed the picker cannot leave an
+  // entry behind.
   try {
     const n = playFlow.draftCount();
-    if (n) console.log(`[PLAY] ${n} pending /play draft(s) still open`);
+    if (n) console.log(`[PLAY] ${n} pending !play draft(s) still open`);
   } catch (e) { /* ignore */ }
 }, 5 * 60 * 1000);
 
@@ -2948,8 +2880,8 @@ client.on(Events.MessageCreate, async (message) => {
     const args = content.split(/\s+/);
     const typedSize = parseTeamSize(args[1]);
 
-    // Bare "!play" now opens the same team-size picker as /play instead of
-    // asking the player to remember the syntax. Typing "!play 3v3" still works.
+    // Bare "!play" opens a team-size picker instead of asking the player to
+    // remember the syntax. Typing "!play 3v3" still works.
     if (!typedSize) {
       if (!isInRequiredVoice(message.member)) {
         return message.reply(voiceCheckMessage());
@@ -3272,24 +3204,10 @@ async function performJoin(interaction, match, team) {
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  // /play and any future slash commands. Handled before the button/modal
-  // routing below so a chat-input command never falls through to it.
+  // No slash commands are registered, but if one is ever invoked anyway, answer
+  // cleanly instead of falling through to the button/modal routing below.
   if (interaction.isChatInputCommand()) {
-    try {
-      if (interaction.commandName === 'play') {
-        return await startPlayDraft(interaction);
-      }
-      return await interaction.reply({ content: '⚠️ Unknown command.', flags: 64 });
-    } catch (e) {
-      errLog(`slash command error (${interaction.commandName}):`, e);
-      try {
-        if (interaction.deferred || interaction.replied) {
-          await interaction.editReply('❌ Something went wrong. Please try again.');
-        } else {
-          await interaction.reply({ content: '❌ Something went wrong. Please try again.', flags: 64 });
-        }
-      } catch { /* ignore */ }
-    }
+    return interaction.reply({ content: '⚠️ Unknown command.', flags: 64 }).catch(() => {});
   }
 
   try {
