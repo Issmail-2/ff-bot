@@ -47,9 +47,9 @@ function sizeLabel(n) {
 // in the default mode can do it in one interaction.
 // ---------------------------------------------------------------------------
 const MODES = [
-  { value: 'amo', label: 'PvP — Custom Room', emoji: '⚔️', desc: 'Normal ranked custom room' },
-  { value: 'ammo', label: 'PvP Yes', emoji: '🎯', desc: 'Second custom queue, pick a style' },
-  { value: 'esport', label: 'Esport', emoji: '🏆', desc: 'Esport lobby and points' }
+  { value: 'amo', label: 'amo-no', emoji: '⚔️', desc: 'Normal custom room' },
+  { value: 'ammo', label: 'amo-yes', emoji: '🎯', desc: 'Custom room with a style' },
+  { value: 'esport', label: 'e-sport', emoji: '🏆', desc: 'Esport lobby and points' }
 ];
 
 // "PvP Yes" matches ask which visual style to apply to the lobby artwork before

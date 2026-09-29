@@ -4,12 +4,12 @@ try { config = require('./config.json'); } catch { config = {}; }
 if (process.env.DISCORD_TOKEN) config.token = process.env.DISCORD_TOKEN;
 if (process.env.SUPERVISOR_ROLE_ID) config.supervisorRoleId = process.env.SUPERVISOR_ROLE_ID;
 if (!config.modes) config.modes = {};
-if (!config.modes.amo) config.modes.amo = { name:'amo', displayName:'Custom Room', command:'!play', matchChannelId: process.env.AMO_CHANNEL_ID||'1545315593450954762', ammoChannelId: process.env.AMMO_CHANNEL_ID||'1547567219167199352', voiceCategoryId: process.env.AMO_VOICE_CATEGORY||'1545316338145165332', logsCategoryId: process.env.AMO_LOGS_CATEGORY||'1545364636034138112', pointsFile:'./data/points.json' };
-if (!config.modes.esport) config.modes.esport = { name:'esport', displayName:'Esport', command:'!esport', matchChannelId: process.env.ESPORT_CHANNEL_ID||'1545388379309482037', voiceCategoryId: process.env.ESPORT_VOICE_CATEGORY||'1545386731686076476', logsCategoryId: process.env.ESPORT_LOGS_CATEGORY||'1545386732982374433', pointsFile:'./data/points_esport.json' };
+if (!config.modes.amo) config.modes.amo = { name:'amo', displayName:'amo-no', command:'!play', matchChannelId: process.env.AMO_CHANNEL_ID||'1545315593450954762', ammoChannelId: process.env.AMMO_CHANNEL_ID||'1547567219167199352', voiceCategoryId: process.env.AMO_VOICE_CATEGORY||'1545316338145165332', logsCategoryId: process.env.AMO_LOGS_CATEGORY||'1545364636034138112', pointsFile:'./data/points.json' };
+if (!config.modes.esport) config.modes.esport = { name:'esport', displayName:'e-sport', command:'!esport', matchChannelId: process.env.ESPORT_CHANNEL_ID||'1545388379309482037', voiceCategoryId: process.env.ESPORT_VOICE_CATEGORY||'1545386731686076476', logsCategoryId: process.env.ESPORT_LOGS_CATEGORY||'1545386732982374433', pointsFile:'./data/points_esport.json' };
 // "PvP Yes" is a second custom-room queue, hosted in the second apostado channel.
 // It shares the amo point file but keeps its own lobby channel, and it is the
 // mode that asks which lobby style to use.
-if (!config.modes.ammo) config.modes.ammo = { name:'ammo', displayName:'PvP Yes', command:'!playyes', matchChannelId: (config.modes.amo && config.modes.amo.ammoChannelId) || process.env.AMMO_CHANNEL_ID || '1547567219167199352', voiceCategoryId: config.modes.amo ? config.modes.amo.voiceCategoryId : undefined, logsCategoryId: config.modes.amo ? config.modes.amo.logsCategoryId : undefined, pointsFile:'./data/points.json', requiresStyle:true };
+if (!config.modes.ammo) config.modes.ammo = { name:'ammo', displayName:'amo-yes', command:'!playyes', matchChannelId: (config.modes.amo && config.modes.amo.ammoChannelId) || process.env.AMMO_CHANNEL_ID || '1547567219167199352', voiceCategoryId: config.modes.amo ? config.modes.amo.voiceCategoryId : undefined, logsCategoryId: config.modes.amo ? config.modes.amo.logsCategoryId : undefined, pointsFile:'./data/points.json', requiresStyle:true };
 if (!config.matchPoints) config.matchPoints = { winner: 80, loser: 30 };
 if (!config.emojis) config.emojis = { game:'<:Free_fire_logo:1466528905509736705>', team1:'<a:aHYPR_GREENDOTid:1545351146770796634>', team2:'<a:aredptid:1545350890989428829>' };
 
@@ -432,7 +432,7 @@ The **#1 ranked player** automatically receives the Role #1 role.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 👥 **ALL MEMBERS**
-\`!play\` — **host a match**: choose PvP or Esport, then 2v2/3v3/4v4 from the menus, then enter your room ID
+\`!play\` - **host a match**: choose **amo-no**, **amo-yes** or **e-sport**, then 2v2/3v3/4v4 from the menus, then enter your room ID
 \`!play 2v2 | 3v3 | 4v4\` — host a match directly
 \`!esport\` — same picker, preselected to Esport
 \`!esport 2v2 | 3v3 | 4v4\` — host an esport match
@@ -1004,7 +1004,7 @@ async function handlePlaySizePick(interaction) {
       ? `<#${modeCfg.matchChannelId}>`
       : `<#${modeCfg.matchChannelId}> or <#${modeCfg.ammoChannelId}>`;
     return interaction.followUp({
-      content: `✅ Mode set to **${mode === 'esport' ? 'Esport' : 'PvP'}**. Now pick a team size.\n⚠️ ${mode === 'esport' ? 'Esport' : 'PvP'} matches must be hosted in ${where}.`,
+      content: `✅ Mode set to **${modeCfg.displayName}**. Now pick a team size.\n⚠️ **${modeCfg.displayName}** matches must be hosted in ${where}.`,
       flags: 64
     }).catch(() => {});
   }
