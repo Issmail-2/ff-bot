@@ -113,6 +113,7 @@ const slash = require('./utils/slash');
 const playFlow = require('./utils/playFlow');
 const tournament = require('./utils/tournament');
 const tourUI = require('./utils/tournamentUI');
+const { buildGuideMessage } = require('./utils/tournamentGuide');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
@@ -3106,6 +3107,14 @@ client.once(Events.ClientReady, async (c) => {
   for (const g of c.guilds.cache.values()) {
     runEnsure(g);
   }
+  // The standing help post in the tournament channel. Recorded in settings, so it
+  // is posted once and then kept up to date rather than piling up duplicates on
+  // every restart.
+  for (const g of c.guilds.cache.values()) {
+    ensureGuidePosted(g)
+      .catch(e => console.log('[GUIDE] post error (harmless):', e.message));
+  }
+
   // One-time: add the server banner to messages posted before withBanner()
   // existed. Runs after the channel ensure above so the ids are populated, and
   // it records itself in settings so it never runs twice.
@@ -4529,6 +4538,63 @@ async function buildRankResponse(message, targetId, mode) {
 // the winner of each matchup. One loss eliminates a team.
 // ---------------------------------------------------------------------------
 
+// Keeps the standing help post in the tournament channel current. Posts it the
+// first time, and edits it in place afterwards, so restarting the bot never fills
+// the channel with copies of the same guide.
+//
+// Returns what it did rather than logging, so the caller decides how loud to be
+// about it.
+async function ensureGuidePosted(guild, { force = false } = {}) {
+  if (!TOURNAMENT_CHANNEL_ID) return { ran: false, reason: 'no channel configured' };
+
+  const channel = guild.channels.cache.get(TOURNAMENT_CHANNEL_ID);
+  if (!channel || !channel.isTextBased()) {
+    return { ran: false, reason: 'channel not available' };
+  }
+
+  const settings = settingsStore.loadSettings();
+  // Only touch a post that is in the channel this is configured for. If the
+  // configured channel changes, the old id belongs somewhere else and editing it
+  // would put a tournament guide in an unrelated channel.
+  const sameChannel = settings.tournamentGuideChannelId === channel.id;
+
+  // Built once and reused. It quotes the live format, so it is rebuilt every
+  // call -- but only once per call, not once per comparison.
+  const payload = buildGuideMessage(guild, tournament.getActive());
+  const existingId = sameChannel ? settings.tournamentGuideMessageId : null;
+  const existing = (!force && existingId && /^\d{17,20}$/.test(String(existingId)))
+    ? await fetchMessage(channel, existingId)
+    : null;
+
+  if (existing) {
+    // Compared before editing, so a restart that changed nothing does not issue a
+    // needless API write and re-trigger edit history on a pinned post.
+    const before = existing.embeds && existing.embeds[0]
+      && typeof existing.embeds[0].toJSON === 'function'
+      ? JSON.stringify(existing.embeds[0].toJSON())
+      : '';
+    const after = JSON.stringify(payload.embeds[0].toJSON());
+    if (before === after) return { ran: true, unchanged: existing.id };
+    await existing.edit(payload).catch(e => note('guide-edit', e));
+    return { ran: true, edited: existing.id };
+  }
+
+  // Either nothing was posted yet, the post was deleted by hand, or the
+  // configured channel changed. fetchMessage returns null for a missing or
+  // malformed id, so one path covers all three.
+  const sent = await channel.send(payload).catch(e => {
+    note('guide-send', e);
+    return null;
+  });
+  if (!sent) return { ran: false, reason: 'send failed' };
+
+  settings.tournamentGuideMessageId = sent.id;
+  settings.tournamentGuideChannelId = channel.id;
+  settings.tournamentGuidePostedAt = new Date().toISOString();
+  settingsStore.saveSettings(settings);
+  return { ran: true, posted: sent.id };
+}
+
 // The bracket is one post that is edited as results land, rather than a new
 // message per result. A reposted bracket scrolls the earlier rounds out of
 // reach and leaves a channel full of near-identical messages.
@@ -4954,6 +5020,11 @@ async function handleTournamentCommand(message, content) {
     if (!res.ok) return message.reply('❌ Could not create the tournament.');
 
     await renderSignup(res.tournament, guild, host);
+
+    // Refresh the standing guide so it advertises the format now open rather
+    // than the generic list it was built with.
+    const guide = await ensureGuidePosted(guild);
+    if (guide.ran) console.log(`[GUIDE] refreshed for ${res.tournament.name}`);
 
     // The mode is asked as a follow-up rather than in the command, so the
     // organiser picks from a menu instead of having to remember the exact
