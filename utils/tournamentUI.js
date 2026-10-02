@@ -79,11 +79,12 @@ function buildSignupMessage(t, guild) {
     )
     .addFields(
       { name: '📋 How it works', value: [
-        'Press **Register Team** and fill in the form.',
-        'You enter **yourself** plus your duo partners.',
-        'Each team can add a **banner** after registering.',
-        'A **single loss eliminates** your team — no second chances.',
-        'Winners advance down the bracket until one team is left.'
+        `Type \`!tsign @friend\` in this channel (you are added automatically).`,
+        `For ${t.teamSize}v${t.teamSize}, tag **${t.teamSize - 1}** player${t.teamSize === 2 ? '' : 's'}.`,
+        'Name your team with `!tsign Team Vertex @friend`, or let the bot use your nickname.',
+        'Or press **Register Team** below and fill in the form instead.',
+        'Each team can add a **banner** with `!tbanner <team>` after registering.',
+        'A **single loss eliminates** your team — no second chances.'
       ].join('\n'), inline: false }
     )
     .setFooter({ text: BRANDING }), guild);

@@ -4640,6 +4640,113 @@ function safeField(interaction, customId) {
   }
 }
 
+// Checks a whole roster against the sign-up rules. The captain is included,
+// because the answer has to be "is this roster allowed in" whichever way the
+// team was entered -- otherwise a captain could enter a partner who is jailed or
+// blacklisted and pull them into the tournament.
+function checkRoster(t, rosterIds) {
+  for (const id of rosterIds) {
+    if (!/^\d{15,20}$/.test(id)) {
+      return { ok: false, text: tourUI.refusal('bad_member') };
+    }
+    if (blacklistModule.isBlacklisted(id)) {
+      return { ok: false, text: `❌ <@${id}> is blacklisted and cannot enter a tournament.` };
+    }
+    if (jailModule.getJail(id)) {
+      return { ok: false, text: `❌ <@${id}> is jailed and cannot enter a tournament.` };
+    }
+    const on = tournament.teamOfUser(t, id);
+    if (on) {
+      return { ok: false, text: tourUI.refusal('player_taken', { playerId: id, teamName: on.name }) };
+    }
+  }
+  return { ok: true };
+}
+
+// Announces a new team in the tournament channel and repaints the sign-up post.
+// Shared by the button form and !tsign, so both paths look identical to everyone
+// else in the channel.
+async function announceTournamentTeam(t, team, guild) {
+  await renderSignup(t, guild);
+  const announce = t.channelId ? guild.channels.cache.get(t.channelId) : null;
+  if (announce && announce.isTextBased()) {
+    await announce.send(tourUI.buildRegisteredMessage(t, team, guild)).catch(e => note('tour-announce', e));
+  }
+}
+
+// Turns a captain's nickname into a team name, so `!tsign @friend` works without
+// anyone having to invent a name first. Falls back to the username, then to a
+// generic label, because a blank name is not something registerTeam accepts.
+function defaultTeamName(member) {
+  const raw = (member && member.displayName) || (member && member.user && member.user.username) || '';
+  const base = String(raw).trim().slice(0, 18);
+  return base ? `${base} FC` : 'New Team';
+}
+
+// !tsign -- the fast way to enter a team.
+//
+//	!tsign @friend                  -> you and one partner, name from your nick
+//	!tsign Team Vertex @a @b        -> named, with two partners
+//
+// You count as the first player, so there is no need to tag yourself. This is
+// open to everyone: it is a sign-up, not an admin action.
+async function handleTournamentSign(message) {
+  const guild = message.guild;
+  const member = message.member;
+  const t = tournament.getActive();
+
+  if (!t) return message.reply('❌ There is no tournament running.');
+
+  if (t.status !== 'signup') {
+    return message.reply(`❌ Sign-ups for **${t.name}** are closed.`);
+  }
+
+  // Bots cannot play, so registering one would create a team that can never take
+  // part. Checked before anything is written.
+  const tagged = [...message.mentions.users.values()];
+  const bot = tagged.find(u => u.bot);
+  if (bot) return message.reply(`❌ <@${bot.id}> is a bot and cannot be on a team.`);
+  if (tagged.some(u => u.id === message.client.user.id)) {
+    return message.reply('❌ I cannot join a team.');
+  }
+
+  const parsed = tournament.parseSignCommand(
+    message.content,
+    message.author.id,
+    tagged.map(u => u.id),
+    t.teamSize
+  );
+
+  if (!parsed.ok) {
+    if (parsed.reason === 'too_few') {
+      return message.reply(
+        `❌ **${t.teamSize}v${t.teamSize}** needs **${t.teamSize}** players — tag **${parsed.need}** more.\n` +
+        'Example: `!tsign @friend`'
+      );
+    }
+    return message.reply(`❌ You tagged **${parsed.got}** players but this tournament is **${t.teamSize}v${t.teamSize}**.`);
+  }
+
+  const eligible = checkRoster(t, parsed.roster);
+  if (!eligible.ok) return message.reply(eligible.text);
+
+  // An empty !tsign falls back to the captain's nickname, so the common case
+  // needs no name at all.
+  const res = tournament.registerTeam(t, {
+    name: parsed.name || defaultTeamName(member),
+    captainId: parsed.captainId,
+    members: parsed.members
+  });
+  if (!res.ok) return message.reply(tourUI.refusal(res.reason, res));
+
+  await announceTournamentTeam(t, res.team, guild);
+  return message.reply(
+    `✅ **${res.team.name}** is registered for **${t.name}**!\n` +
+    `Roster: ${tourUI.roster(guild, res.team, 300)}\n` +
+    `Add a banner any time with \`!tbanner ${res.team.name}\`.`
+  );
+}
+
 async function handleTournamentRegisterModal(interaction) {
   const guild = interaction.guild;
   const t = tournament.getActive();
@@ -4660,44 +4767,16 @@ async function handleTournamentRegisterModal(interaction) {
 
   await interaction.deferReply({ flags: 64 });
 
-  const already = tournament.teamOfUser(t, interaction.user.id);
-  if (already) {
-    return interaction.editReply({ content: `❌ You are already registered with **${already.name}**. One team per player.` });
-  }
-
-  // Eligibility is checked across the whole roster, not just whoever filled in
-  // the form -- otherwise a captain could register a partner who is jailed or
-  // blacklisted and pull them into the tournament.
   const rosterIds = [interaction.user.id, ...partners.filter(p => p !== interaction.user.id)];
-  for (const id of rosterIds) {
-    if (!/^\d{15,20}$/.test(id)) {
-      return interaction.editReply({ content: tourUI.refusal('bad_member') });
-    }
-    if (blacklistModule.isBlacklisted(id)) {
-      return interaction.editReply({ content: `❌ <@${id}> is blacklisted and cannot enter a tournament.` });
-    }
-    if (jailModule.getJail(id)) {
-      return interaction.editReply({ content: `❌ <@${id}> is jailed and cannot enter a tournament.` });
-    }
-    const on = tournament.teamOfUser(t, id);
-    if (on) {
-      return interaction.editReply({ content: tourUI.refusal('player_taken', { playerId: id, teamName: on.name }) });
-    }
-  }
+  const eligible = checkRoster(t, rosterIds);
+  if (!eligible.ok) return interaction.editReply({ content: eligible.text });
 
   const res = tournament.registerTeam(t, { name, captainId: interaction.user.id, members: partners });
   if (!res.ok) {
     return interaction.editReply({ content: tourUI.refusal(res.reason, res) });
   }
 
-  await renderSignup(t, guild);
-
-  // Announced in-channel so the whole server can see who is in and check the
-  // roster, rather than only the captain learning that it worked.
-  const announce = t.channelId ? guild.channels.cache.get(t.channelId) : null;
-  if (announce && announce.isTextBased()) {
-    await announce.send(tourUI.buildRegisteredMessage(t, res.team, guild)).catch(e => note('tour-announce', e));
-  }
+  await announceTournamentTeam(t, res.team, guild);
 
   return interaction.editReply({
     content: `✅ **${res.team.name}** is registered for **${t.name}**!\nAdd a banner any time with \`!tbanner ${res.team.name}\`.`
@@ -4819,6 +4898,13 @@ async function handleTournamentCommand(message, content) {
       )
       .setFooter({ text: BRANDING });
     return message.reply(withThumbnail(embed, guild));
+  }
+
+  // Both entry points share one gate, so the ordering rule lives in one place.
+  // !tsign is matched first so a sign-up is never read as a tournament-admin
+  // action.
+  if (content.startsWith('!tsign')) {
+    return await handleTournamentSign(message);
   }
 
   if (content.startsWith('!tcreate')) {

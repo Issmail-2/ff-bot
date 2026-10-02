@@ -341,6 +341,48 @@ function setMode(t, mode, style) {
   return { ok: true, mode, style: t.style };
 }
 
+// Parses a !tsign command into a roster and an optional team name.
+//
+// This is a pure function on purpose. It is the part that decides who ends up on
+// a team, so it is far easier to be sure about when it can be handed a string
+// and a list of mentioned ids than when it can only be exercised through Discord.
+//
+// The author is always part of the roster, so `!tsign @friend` is enough to enter
+// a 2v2 -- asking someone to tag themselves as well is a papercut, not a
+// safeguard. Mentions are read first and whatever text is left over becomes the
+// name, so `!tsign Team Vertex @a @b` works.
+function parseSignCommand(text, authorId, mentionedIds, teamSize) {
+  const mentioned = Array.from(new Set((mentionedIds || []).filter(Boolean)));
+  const roster = Array.from(new Set([authorId, ...mentioned]));
+
+  if (roster.length < teamSize) {
+    return { ok: false, reason: 'too_few', need: teamSize - roster.length, got: roster.length };
+  }
+  if (roster.length > teamSize) {
+    return { ok: false, reason: 'too_many', got: roster.length, max: teamSize };
+  }
+
+  // The leading command word is stripped whether it was typed with ! or with &,
+  // because the message router accepts both -- otherwise "&tsign Team X" would
+  // try to register a team literally called "tsign Team X".
+  const name = String(text == null ? '' : text)
+    .replace(/<@!?\d+>/g, ' ')
+    .replace(/^\s*[&!]?\s*tsign\b\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_TEAM_NAME);
+
+  return {
+    ok: true,
+    name,
+    captainId: authorId,
+    // The author is captain and is not repeated in the partner list. registerTeam
+    // re-adds the captain at the front, so listing them twice would be redundant.
+    members: roster.filter(id => id !== authorId),
+    roster
+  };
+}
+
 function modeLabel(t) {
   const m = MODES.find(x => x.value === (t && t.mode));
   return m ? m.label : null;
@@ -543,6 +585,7 @@ module.exports = {
   setMode,
   modeLabel,
   styleLabel,
+  parseSignCommand,
   registerTeam,
   removeTeam,
   setBanner,
