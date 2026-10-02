@@ -121,6 +121,10 @@ const CHECK_CHANNEL_ID = process.env.CHECK_CHANNEL_ID || '1546846854556286976';
 const EXPOSE_CHANNEL_ID = process.env.EXPOSE_CHANNEL_ID || '1518059555622228038';
 const APPLY_CATEGORY_ID = process.env.APPLY_CATEGORY_ID || '1476278897107538023';
 const APPLY_QUEUE_CHANNEL_ID = process.env.APPLY_QUEUE_CHANNEL_ID || '1450844020853968896';
+// The one channel a tournament is hosted in. Left empty on purpose until the
+// real id is set: while it is empty, !tcreate falls back to whichever channel it
+// is run in, which is the old behaviour and needs no configuration.
+const TOURNAMENT_CHANNEL_ID = process.env.TOURNAMENT_CHANNEL_ID || config.tournamentChannelId || '';
 const REPORT_COST = parseInt(process.env.REPORT_COST || '', 10) || 50;
 const REPORT_REWARD = parseInt(process.env.REPORT_REWARD || '', 10) || 100;
 
@@ -4758,15 +4762,23 @@ async function handleTournamentCommand(message, content) {
       return message.reply('❌ Team size must be `2v2`, `3v3` or `4v4`.');
     }
 
+    // The sign-up post goes to the configured tournament channel, not
+    // necessarily the channel the admin typed the command in.
+    const hostId = TOURNAMENT_CHANNEL_ID || message.channel.id;
+    const host = guild.channels.cache.get(hostId);
+    if (!host || !host.isTextBased()) {
+      return message.reply(`❌ I could not find the tournament channel \`${hostId}\`. Check the id or the \`TOURNAMENT_CHANNEL_ID\` env var.`);
+    }
+
     const res = tournament.createTournament({
       name,
       teamSize: size || 4,
-      channelId: message.channel.id,
+      channelId: hostId,
       createdBy: member.id
     });
     if (!res.ok) return message.reply('❌ Could not create the tournament.');
 
-    await renderSignup(res.tournament, guild, message.channel);
+    await renderSignup(res.tournament, guild, host);
     return message.reply(`🏆 **${res.tournament.name}** created! Format **${res.tournament.teamSize}v${res.tournament.teamSize}**. Teams can register below.`);
   }
 
@@ -4785,7 +4797,7 @@ async function handleTournamentCommand(message, content) {
     // The sign-up post has done its job; the bracket takes over the channel.
     const signup = await fetchMessage(message.channel, t.signupMessageId);
     if (signup) await signup.delete().catch(e => note('tour-signup-delete', e));
-    await renderTournament(t, guild, message.channel);
+    await renderTournament(t, guild);
     return message.reply(`⚔️ **${t.name}** has started — ${res.rounds} rounds. Staff decide each matchup with the buttons on the bracket.`);
   }
 
