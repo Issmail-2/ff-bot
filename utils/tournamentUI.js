@@ -65,6 +65,11 @@ const START_BTN = 'tour_startnow';
 const MY_TEAM_BTN = 'tour_myteam';
 const GUIDE_BTN = 'tour_guidebtn';
 const TEAMS_BTN = 'tour_teamsbtn';
+const SETUP_BTN = 'tour_setupvoice';
+// Held here rather than in tournamentVoice so every button id lives in one place,
+// but the prefix is what the router matches on. The id is suffixed with the
+// tournament id so a stale button from a finished tournament is refused.
+const SPIN_BTN = 'tour_draw_';
 const PICK_A = 'tour_win_a_';
 const PICK_B = 'tour_win_b_';
 const MODE_MENU = 'tour_mode_';
@@ -140,6 +145,23 @@ function buildSignupMessage(t, guild) {
       .setStyle(ButtonStyle.Danger)
       .setEmoji('🔒')
       .setDisabled(!open)
+  ));
+
+  // Row 3: admin-only tools, shown but gated in the handler. The draw is here
+  // because deciding the order is an organiser job, and having it as a button
+  // means nobody has to remember a command.
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(SPIN_BTN + t.id)
+      .setLabel('🎡 Draw')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🎰')
+      .setDisabled(!open || t.teams.length < 2),
+    new ButtonBuilder()
+      .setCustomId(SETUP_BTN)
+      .setLabel('Voice Channels')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🔊')
   ));
 
   return { embeds: [embed], components: rows };
@@ -380,7 +402,12 @@ function buildBracketMessage(t, guild) {
       `\`\`\`\n${STICKERS.team1} ${pad(teamLabel(a, 18))}\n${STICKERS.team2} ${pad(teamLabel(b, 18))}\n\`\`\`\n` +
       captains;
   } else {
-    header = `⏳ **No match is waiting for a result.** An admin decides each matchup with the buttons below.`;
+    // With no live matchup the bracket is still doing something: either every
+    // remaining team is through to a later round, or the tournament is over.
+    // "No match is waiting" on its own reads like a stuck bot.
+    header = p.finished
+      ? '👑 Deciding the champion.'
+      : `⏳ **No matchup is ready yet** — ${p.alive} team${p.alive === 1 ? '' : 's'} still in, waiting on the previous round.`;
   }
 
   const mode = T.modeLabel(t);
@@ -570,6 +597,8 @@ module.exports = {
   MY_TEAM_BTN,
   GUIDE_BTN,
   TEAMS_BTN,
+  SETUP_BTN,
+  SPIN_BTN,
   MODE_MENU,
   STYLE_MENU,
   clip,

@@ -114,6 +114,7 @@ const playFlow = require('./utils/playFlow');
 const tournament = require('./utils/tournament');
 const tourUI = require('./utils/tournamentUI');
 const { buildGuideMessage } = require('./utils/tournamentGuide');
+const tourVoice = require('./utils/tournamentVoice');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
@@ -3103,6 +3104,12 @@ client.once(Events.ClientReady, async (c) => {
   const runEnsure = async (g) => {
     try { await ensureCheaterChannels(g); } catch (e) { console.log(`[CHEAT] ensure error: ${e.message}`); }
     try { await ensureApplyChannels(g); } catch (e) { console.log(`[APPLY] ensure error: ${e.message}`); }
+    // Tournament voice needs Manage Channels, so a refusal here is expected on a
+    // server that has not granted it and must not be fatal.
+    try {
+      const v = await ensureTournamentVoice(g);
+      if (v && v.ok) console.log(`[TOUR-VOICE] ready - stage ${v.stageId}, rooms ${v.roomIds.join(', ')}`);
+    } catch (e) { console.log('[TOUR-VOICE] ensure error:', e.message); }
   };
   for (const g of c.guilds.cache.values()) {
     runEnsure(g);
@@ -3675,6 +3682,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.isButton() && (interaction.customId.startsWith(tourUI.PICK_A) || interaction.customId.startsWith(tourUI.PICK_B))) {
     return await handleTournamentPick(interaction);
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(tourUI.SPIN_BTN)) {
+    return await handleTournamentRoulette(interaction);
+  }
+
+  if (interaction.isButton() && interaction.customId === tourUI.SETUP_BTN) {
+    if (!canManageTournament(interaction.member)) {
+      return interaction.reply({ content: '❌ Only tournament admins can set the voice channels up.', flags: 64 });
+    }
+    const res = await ensureTournamentVoice(interaction.guild).catch(e => {
+      note('tour-voice', e);
+      return { ok: false, reason: e.message };
+    });
+    if (!res.ok) {
+      return interaction.reply({ content: `❌ Could not set up the voice channels: \`${res.reason}\`.`, flags: 64 });
+    }
+    return interaction.reply({
+      content:
+        `🔊 Voice channels are ready.\n` +
+        `**📺 Stage** — <#${res.stageId}>, everyone can join to watch\n` +
+        `**Team rooms** — ${res.roomIds.map(id => `<#${id}>`).join(' · ')}, only the teams in the current matchup`,
+      ephemeral: true
+    });
   }
 
   if (interaction.isButton() && interaction.customId === tourUI.NEXT_BTN) {
@@ -4804,6 +4835,79 @@ function safeField(interaction, customId) {
   }
 }
 
+// Opens team access on the two tournament voice rooms for the current matchup,
+// then announces it. Both are best-effort: a server without Manage Channels must
+// still be able to run a tournament, so a voice failure is logged and the
+// bracket carries on.
+async function openMatchupVoice(t, guild) {
+  const live = tournament.getLiveMatch(t);
+  if (!live) return { ok: false, reason: 'no_live_match' };
+
+  const a = tournament.getTeam(t, live.match.a);
+  const b = tournament.getTeam(t, live.match.b);
+
+  const assigned = await tourVoice.assignTeamRooms(guild, live, a, b);
+  if (!assigned.ok) console.log(`[TOUR-VOICE] room assignment skipped: ${assigned.reason}`);
+
+  const announced = await tourVoice.announceMatchup(guild, t, a, b);
+  return { ok: true, rooms: assigned, announced };
+}
+
+// Locks the team rooms and tells everyone the result. Called after every
+// decision, so a knocked-out team loses access to the rooms before the next
+// matchup is announced into them.
+async function closeMatchupVoice(t, guild, winner, loser) {
+  const locked = await tourVoice.lockTeamRooms(guild, 'round decided');
+
+  const live = tournament.getLiveMatch(t);
+  const nextA = live ? tournament.getTeam(t, live.match.a) : null;
+  const nextB = live ? tournament.getTeam(t, live.match.b) : null;
+
+  const extra = [
+    `🏆 **${winner.name}** won. **${loser.name}** is out.`,
+    live && nextA && nextB
+      ? `Next up in the rooms: **${nextA.name}** vs **${nextB.name}**.`
+      : 'That was the last matchup — the tournament is over.'
+  ].join('\n');
+
+  const stage = await tourVoice.findStage(guild);
+  if (stage && stage.isTextBased()) {
+    await stage.send({ embeds: [tourVoice.buildAnnouncement(t, live, nextA, nextB, extra, guild)] })
+      .catch(e => note('tour-announce', e));
+  }
+  const textChannel = t.channelId ? guild.channels.cache.get(t.channelId) : null;
+  if (textChannel && textChannel.isTextBased()) {
+    await textChannel.send({ embeds: [tourVoice.buildAnnouncement(t, live, nextA, nextB, extra, guild)] })
+      .catch(e => note('tour-announce', e));
+  }
+
+  return { ok: true, locked: locked.locked };
+}
+
+// Creates the tournament voice channels if they are missing, then opens the
+// rooms for whatever the live matchup is. Called on boot and after !tstart.
+async function ensureTournamentVoice(guild) {
+  const created = await tourVoice.ensureChannels(guild, guild.members.me);
+  if (!created.ok) {
+    console.log(`[TOUR-VOICE] could not set up channels: ${created.reason}`);
+    return created;
+  }
+
+  const t = tournament.getActive();
+  if (t && t.status === 'running') {
+    const live = tournament.getLiveMatch(t);
+    if (live) {
+      await tourVoice.assignTeamRooms(
+        guild,
+        live,
+        tournament.getTeam(t, live.match.a),
+        tournament.getTeam(t, live.match.b)
+      ).catch(e => note('tour-voice', e));
+    }
+  }
+  return created;
+}
+
 // Checks a whole roster against the sign-up rules. The captain is included,
 // because the answer has to be "is this roster allowed in" whichever way the
 // team was entered -- otherwise a captain could enter a partner who is jailed or
@@ -5035,7 +5139,82 @@ async function handleTournamentPick(interaction) {
     interaction.user.id,
     guild
   );
+  // The rooms are locked for the team that lost and reopened for whoever is up
+  // next, and the stage is told who won. Failures here are logged rather than
+  // surfaced: the result is already saved, so a voice problem must not make a
+  // recorded result look unrecorded.
+  if (res.ok && res.winner && res.loser) {
+    await closeMatchupVoice(t, guild, res.winner, res.loser).catch(e => note('tour-voice', e));
+    if (tournament.getLiveMatch(t)) {
+      await openMatchupVoice(t, guild).catch(e => note('tour-voice', e));
+    }
+  }
+
   return interaction.editReply({ content: tournamentOutcomeText(t, res) });
+}
+
+// The roulette. Ephemeral, because the draw is an admin tool and the spin is only
+// interesting to whoever pressed it.
+async function handleTournamentRoulette(interaction) {
+  const guild = interaction.guild;
+  const t = tournament.getActive();
+
+  if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+  if (!canManageTournament(interaction.member)) {
+    return interaction.reply({ content: '❌ Only tournament admins can run the draw.', flags: 64 });
+  }
+  if (t.status !== 'signup') {
+    return interaction.reply({
+      content: '❌ The bracket has already been built, so the draw can no longer change it.',
+      flags: 64
+    });
+  }
+  if (t.teams.length < 2) {
+    return interaction.reply({ content: '❌ You need at least 2 teams before drawing.', flags: 64 });
+  }
+
+  // Seed numbers rather than team ids: a padded field still needs byes in fixed
+  // slots, and seeds survive a rename between the spin and the start.
+  const seeds = shuffleSeeds(t.teams.length);
+  const saved = tournament.setPendingDraw(t, seeds);
+  if (!saved.ok) {
+    return interaction.reply({ content: '❌ The draw could not be saved.', flags: 64 });
+  }
+
+  // The panel shows the order the spin produced, so what people were shown is
+  // exactly what startTournament will build.
+  t.roulette = { pool: t.teams.map(x => x.name), order: t.teams.map(x => x.id) };
+  tournament.persist();
+
+  await interaction.reply(tourVoice.buildRoulette(t, guild, false));
+
+  // The first pairing, named so the admin does not have to read it off the list.
+  const pair = tourVoice.drawPair(t);
+  if (!pair) return;
+  const a = tournament.getTeam(t, pair[0]);
+  const b = tournament.getTeam(t, pair[1]);
+  const resultEmbed = new EmbedBuilder()
+    .setTitle(`${STICKERS.game} 🎡 Draw result`)
+    .setColor(COLORS.gold)
+    .setDescription(
+      `**${a ? a.name : '?'}**  ⚔️  **${b ? b.name : '?'}**\n\n` +
+      `First matchup of **${t.name}**. Press **!tstart** to build the bracket with this draw.`
+    )
+    .setFooter({ text: BRANDING });
+
+  return interaction.followUp({ embeds: [withThumbnail(resultEmbed, guild)], ephemeral: true })
+    .catch(e => note('tour-roulette', e));
+}
+
+// Seed numbers 1..n in random order, from the same shuffle the roulette panel
+// shows.
+function shuffleSeeds(n) {
+  const a = Array.from({ length: n }, (_, i) => i + 1);
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
 async function handleTournamentCommand(message, content) {
@@ -5072,11 +5251,23 @@ async function handleTournamentCommand(message, content) {
   // Both entry points share one gate, so the ordering rule lives in one place.
   // !tsign is matched first so a sign-up is never read as a tournament-admin
   // action, and !tlogin before both so the guide is never mistaken for a sign-up.
-  // Exact match only. Without this, "!tlogin" would be swallowed by the
-  // startsWith checks further down and answered as a tournament command that
-  // does not exist.
+  // Exact matches first. Without this, "!tlogin" and "!tsetup" would be
+  // swallowed by the startsWith checks further down and answered as tournament
+  // commands that do not exist.
   if (content === '!tlogin' || content === '!tguide') {
     return message.reply({ embeds: [tourUI.buildLoginGuide(tournament.getActive(), guild)] });
+  }
+
+  if (content === '!tsetup') {
+    const t = tournament.getActive();
+    if (!canManageTournament(member)) return message.reply('❌ Only tournament admins can set the voice channels up.');
+    const res = await ensureTournamentVoice(guild).catch(e => { note('tour-voice', e); return { ok: false, reason: e.message }; });
+    if (!res.ok) return message.reply(`❌ Could not set up the voice channels: \`${res.reason}\`.`);
+    return message.reply(
+      `🔊 Voice channels are ready.\n` +
+      `**📺 Stage** — <#${res.stageId}>, everyone can join to watch\n` +
+      `**Team rooms** — ${res.roomIds.map(id => `<#${id}>`).join(' · ')}, only the teams in the current matchup`
+    );
   }
 
   if (content.startsWith('!tsign')) {
@@ -5155,7 +5346,26 @@ async function handleTournamentCommand(message, content) {
     const signup = await fetchMessage(message.channel, t.signupMessageId);
     if (signup) await signup.delete().catch(e => note('tour-signup-delete', e));
     await renderTournament(t, guild);
-    return message.reply(`⚔️ **${t.name}** has started — ${res.rounds} rounds. Staff decide each matchup with the buttons on the bracket.`);
+
+    // Voice channels, then the rooms for whoever is up first. Best-effort: the
+    // tournament runs whether or not the bot can manage channels.
+    const voice = await ensureTournamentVoice(guild).catch(e => {
+      note('tour-voice', e);
+      return { ok: false, reason: e.message };
+    });
+    if (voice.ok) {
+      await openMatchupVoice(t, guild).catch(e => note('tour-voice', e));
+    }
+
+    const voiceNote = voice.ok
+      ? `\n🔊 **📺 Stage** is live — everyone can join to watch. Teams use their private room.`
+      : `\n⚠️ I could not set up the voice channels (\`${voice.reason}\`). Run \`!tsetup\` to retry.`;
+
+    return message.reply(
+      `⚔️ **${t.name}** has started — ${res.rounds} rounds` +
+      `${res.drawn ? ' using the draw' : ''}. Staff decide each matchup with the buttons on the bracket.` +
+      voiceNote
+    );
   }
 
   if (content.startsWith('!twin')) {
@@ -5175,6 +5385,15 @@ async function handleTournamentCommand(message, content) {
     }
     const res = await settleTournamentMatch(t, live.match.id, team.id, member.id, guild);
     if (!res.ok) return message.reply(tournamentOutcomeText(t, res));
+
+    // Same voice handling as the buttons, so the two paths cannot diverge.
+    if (res.winner && res.loser) {
+      await closeMatchupVoice(t, guild, res.winner, res.loser).catch(e => note('tour-voice', e));
+      if (tournament.getLiveMatch(t)) {
+        await openMatchupVoice(t, guild).catch(e => note('tour-voice', e));
+      }
+    }
+
     return message.reply(`🏆 Round **${live.round.number}** decided — the bracket has been updated.`);
   }
 

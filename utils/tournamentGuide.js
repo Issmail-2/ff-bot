@@ -35,8 +35,16 @@ const ADMIN_COMMANDS = [
   '`!tclose` — stop sign-ups early',
   '`!tstart` — build the bracket and begin',
   '`!twin <team>` — declare the winner of a matchup',
+  '`!tsetup` — create the stage and the two team rooms',
   '`!tcancel` — cancel and archive',
   '`!tarchive` — archive a finished tournament'
+];
+
+const VOICE_COMMANDS = [
+  '**📺 Stage** — open to everyone, where announcements are posted',
+  '**🔒 Team Room 1 / 2** — only the two teams in the current matchup',
+  'Access is rewritten after every result',
+  'Both captains join their team room; everyone else joins the stage'
 ];
 
 function buildGuideMessage(guild, activeTournament) {
@@ -97,6 +105,7 @@ function buildGuideMessage(guild, activeTournament) {
       },
       { name: '👥 Player commands', value: PLAYER_COMMANDS.join('\n'), inline: false },
       { name: '🛡️ Admin commands', value: ADMIN_COMMANDS.join('\n'), inline: false },
+      { name: '🔊 Voice during a tournament', value: VOICE_COMMANDS.join('\n'), inline: false },
       {
         name: '❌ Common mistakes',
         value: [
@@ -153,4 +162,4 @@ function labelOf(t) {
   return t.style ? `${base} · ${styles[t.style] || t.style}` : base;
 }
 
-module.exports = { buildGuideMessage, PLAYER_COMMANDS, ADMIN_COMMANDS };
+module.exports = { buildGuideMessage, PLAYER_COMMANDS, ADMIN_COMMANDS, VOICE_COMMANDS };

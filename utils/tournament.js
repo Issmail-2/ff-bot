@@ -123,15 +123,34 @@ function newMatch(round, index, a, b) {
   };
 }
 
-function createBracket(teamIds) {
+// Builds the bracket.
+//
+// drawOrder, when given, is the sequence of seed numbers to place in bracket
+// slots rather than the standard seed order. That is how the roulette sets the
+// pairings: it shuffles the seeds and passes them here, so the bracket people
+// were shown by the spin is literally the bracket that gets built. Passing seed
+// numbers rather than team ids is what keeps a padded field working, since a
+// non-power-of-two entry still needs byes in the same slots.
+function createBracket(teamIds, drawOrder) {
   const size = nextPow2(Math.max(2, teamIds.length));
-  const order = seedOrder(size);
+  const order = drawOrder || seedOrder(size);
   const bySeed = new Map(teamIds.map((id, i) => [i + 1, id]));
 
   const first = new Array(size).fill(null);
   order.forEach((seed, pos) => {
     first[pos] = bySeed.get(seed) || null;
   });
+
+  // Byes are already spread correctly by seedOrder, so there is deliberately no
+  // pass here to redistribute them. seedOrder places the absent seeds across the
+  // round rather than at the end: 5 teams into 8 slots gives 1v-, 4v5, 2v-, 3v-
+  // -- one bye per matchup, instead of both stacked on the last one where a
+  // second would be wasted and a team would be left with nowhere to go. That
+  // failure is invisible until the final, where the tournament cannot finish.
+  //
+  // It also means a draw order has to be a full permutation of 1..n. Passing a
+  // shorter list would leave its tail null, which is a different problem: those
+  // slots are genuine byes rather than missing seeds.
 
   const rounds = [];
   let count = size / 2;
@@ -153,10 +172,46 @@ function createBracket(teamIds) {
   return rounds;
 }
 
-// A slot with one team and one bye is not something staff should have to decide,
-// so it resolves itself and the team moves on. Both slots empty is a void and
-// forwards nothing. Repeated until stable because a bye decided early can leave
-// the next round with nothing to do either.
+// Is this slot genuinely empty, or is it just waiting for a feeder match that has
+// not been played yet?
+//
+// This distinction is the whole ball game. In round 1 a slot is settled the
+// moment the bracket is built -- nobody is going to put a team there later. But
+// in round 2 an empty slot means "the match feeding it has not been decided", and
+// treating that as a bye auto-advances the other team and quietly eliminates a
+// team that was never beaten. With 8 teams that produced a bracket where every
+// round from 2 onwards read BYE v BYE and 7 teams were marked eliminated with one
+// decision.
+//
+// A slot is only settled-empty when every match that can feed it is finished and
+// none of them produced a winner.
+function slotSettledEmpty(t, roundIndex, matchIndex, side) {
+  const round = t.rounds[roundIndex];
+  const m = round && round.matches[matchIndex];
+  if (!m) return true;
+  if (side === 'a') if (m.a) return false;
+  else if (m.b) return false;
+
+  // Round 1 is filled once and never again.
+  if (roundIndex === 0) return true;
+
+  // Feeder matches are 2i (slot a) and 2i+1 (slot b) of the previous round.
+  const feederIndex = matchIndex * 2 + (side === 'a' ? 0 : 1);
+  const prev = t.rounds[roundIndex - 1];
+  const feeder = prev && prev.matches[feederIndex];
+  if (!feeder) return true;
+
+  // Still to come, so this slot is simply not filled yet.
+  if (feeder.status !== 'done' && feeder.status !== 'void') return false;
+
+  // Finished, but it produced a winner -- who has already been placed in this
+  // slot by placeInNextRound. The empty check above would have caught that.
+  return true;
+}
+
+// Advances every matchup that has one team and a settled-empty other side, and
+// voids the ones with two settled-empty sides. Repeated until stable, because a
+// bye that resolves early can settle the matchup behind it.
 function resolveByes(t) {
   let moved = true;
   while (moved) {
@@ -167,6 +222,16 @@ function resolveByes(t) {
         const m = round.matches[i];
         if (m.status === 'done' || m.status === 'void') continue;
         if (m.a && m.b) continue;
+
+        const emptyA = !m.a;
+        const emptyB = !m.b;
+        // Proceed only when every empty side is settled. A side that is empty but
+        // still waiting on an unplayed feeder makes the whole matchup pending --
+        // checking only that both sides are empty would strand a team that is
+        // sitting in the other slot.
+        if (emptyA && !slotSettledEmpty(t, r, i, 'a')) continue;
+        if (emptyB && !slotSettledEmpty(t, r, i, 'b')) continue;
+
         const auto = m.a || m.b || null;
         m.status = 'void';
         m.winner = auto;
@@ -453,17 +518,56 @@ function setBanner(t, teamId, url) {
   return { ok: true, team };
 }
 
+// Builds the bracket and marks the tournament running.
+//
+// A pending draw from the roulette is applied here rather than being discarded,
+// because the whole point of showing people a spin is that the bracket it
+// produced is the one that gets played. The draw is consumed so a later restart
+// of the same tournament does not re-roll it.
 function startTournament(t) {
   if (!t) return { ok: false, reason: 'no_active_tournament' };
   if (t.status !== 'signup') return { ok: false, reason: 'already_started' };
   if (t.teams.length < MIN_TEAMS) return { ok: false, reason: 'too_few_teams', count: t.teams.length };
 
-  t.rounds = createBracket(t.teams.map(x => x.id));
+  const ids = t.teams.map(x => x.id);
+  let drawOrder = null;
+  if (t.pendingDraw && Array.isArray(t.pendingDraw.order) && t.pendingDraw.order.length === ids.length) {
+    // The draw stores seed numbers (1..n) rather than ids, so it keeps working
+    // if a team is renamed between the spin and the start.
+    drawOrder = t.pendingDraw.order;
+  }
+
+  t.rounds = createBracket(ids, drawOrder);
   t.status = 'running';
   t.startedAt = Date.now();
+  t.drawnAt = drawOrder ? Date.now() : null;
+  t.pendingDraw = null;
   resolveByes(t);
   persist();
-  return { ok: true, rounds: t.rounds.length };
+  return { ok: true, rounds: t.rounds.length, drawn: !!drawOrder };
+}
+
+// Queues a roulette result to be used by the next startTournament.
+//
+// Only accepted while sign-ups are open: once the bracket exists the pairings are
+// fixed, and letting a draw land afterwards would silently rewrite matches that
+// people have already played.
+function setPendingDraw(t, order) {
+  if (!t) return { ok: false, reason: 'no_active_tournament' };
+  if (t.status !== 'signup') return { ok: false, reason: 'not_signup' };
+  if (!Array.isArray(order) || order.length !== t.teams.length) {
+    return { ok: false, reason: 'wrong_length', got: Array.isArray(order) ? order.length : 0, need: t.teams.length };
+  }
+  t.pendingDraw = { order: order.slice(), drawnAt: Date.now() };
+  persist();
+  return { ok: true };
+}
+
+function clearPendingDraw(t) {
+  if (!t) return { ok: false, reason: 'no_active_tournament' };
+  t.pendingDraw = null;
+  persist();
+  return { ok: true };
 }
 
 // Records a staff decision for one matchup. The loser is struck out of the
@@ -586,6 +690,8 @@ module.exports = {
   modeLabel,
   styleLabel,
   parseSignCommand,
+  setPendingDraw,
+  clearPendingDraw,
   registerTeam,
   removeTeam,
   setBanner,
