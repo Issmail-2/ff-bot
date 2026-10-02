@@ -4902,7 +4902,14 @@ async function handleTournamentCommand(message, content) {
 
   // Both entry points share one gate, so the ordering rule lives in one place.
   // !tsign is matched first so a sign-up is never read as a tournament-admin
-  // action.
+  // action, and !tlogin before both so the guide is never mistaken for a sign-up.
+  // Exact match only. Without this, "!tlogin" would be swallowed by the
+  // startsWith checks further down and answered as a tournament command that
+  // does not exist.
+  if (content === '!tlogin' || content === '!tguide') {
+    return message.reply({ embeds: [tourUI.buildLoginGuide(tournament.getActive(), guild)] });
+  }
+
   if (content.startsWith('!tsign')) {
     return await handleTournamentSign(message);
   }

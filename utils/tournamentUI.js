@@ -79,11 +79,11 @@ function buildSignupMessage(t, guild) {
     )
     .addFields(
       { name: '📋 How it works', value: [
-        `Type \`!tsign @friend\` in this channel (you are added automatically).`,
-        `For ${t.teamSize}v${t.teamSize}, tag **${t.teamSize - 1}** player${t.teamSize === 2 ? '' : 's'}.`,
-        'Name your team with `!tsign Team Vertex @friend`, or let the bot use your nickname.',
-        'Or press **Register Team** below and fill in the form instead.',
-        'Each team can add a **banner** with `!tbanner <team>` after registering.',
+        `**Step 1** — type \`!tsign @friend\` here (you are added automatically).`,
+        `For ${t.teamSize}v${t.teamSize}, tag **${t.teamSize - 1}** other player${t.teamSize === 2 ? '' : 's'}.`,
+        'Add a name with `!tsign Team Vertex @friend`, or let the bot use your nickname.',
+        `**Step 2** — upload your logo, then \`!tbanner Team Vertex\`.`,
+        '**Not sure of the format? Type `!tlogin`** for a line you can copy.',
         'A **single loss eliminates** your team — no second chances.'
       ].join('\n'), inline: false }
     )
@@ -179,6 +179,68 @@ function buildModeConfirmed(t, mode, style, guild) {
     )
     .setFooter({ text: BRANDING });
   return { embeds: [withThumbnail(embed, guild)], ephemeral: true };
+}
+
+// Returns the embed itself, not a message payload. This one is built to be read
+// on its own and is wrapped by whichever caller needs it in a payload, so it
+// does not force every caller to remember the { embeds: [ ... ] } shape.
+// ---------------------------------------------------------------------------
+// !tlogin -- the copy-and-fill-in guide
+//
+// The template lives in a code block on purpose. Discord does not let a bot
+// actually ping a user with @: an @mention authored by a bot is rendered with
+// "suppress embeds" and never notifies anyone, so a template written as real
+// mentions would look correct and do nothing. Inside a code block the text is
+// literal, is not a real mention, and copies cleanly -- which is what the person
+// signing up actually wants.
+//
+// Returns the embed itself rather than a message payload, so a caller can drop it
+// wherever one is needed.
+// ---------------------------------------------------------------------------
+function buildLoginGuide(t, guild) {
+  const size = t ? t.teamSize : 4;
+  const partners = size - 1;
+  const mode = t ? T.modeLabel(t) : null;
+  const style = t ? T.styleLabel(t) : null;
+  const placeholders = Array.from({ length: partners }, (_, i) => `@player${i + 2}_id`).join(' ');
+
+  const embed = new EmbedBuilder()
+    .setTitle(`${STICKERS.game} 🏆 How to sign up`)
+    .setColor(COLORS.primary)
+    .setDescription(
+      (t
+        ? `**${t.name}** is open — **${size}v${size}**, ${mode ? `**${mode}**` : 'mode not set yet'}${style ? ` · ${style}` : ''}.\n\n`
+        : `No tournament is open right now, but this is the format whenever one is.\n\n`) +
+      '**Step 1 — copy this line and edit it.**\n' +
+      'Put your team name in, then tag yourself and your ' + (partners === 1 ? 'partner' : `${partners} partners`) + '.\n\n' +
+      '```\n!tsign Your Team Name ' + placeholders + '\n```\n\n' +
+      'Tag people by typing **`@`** and picking them from the list — that puts their real id in for you.\n\n' +
+      '**Step 2 — add your team logo.**\n' +
+      'Upload your logo as an image in this channel, then:\n\n' +
+      '```\n!tbanner Your Team Name\n```\n\n' +
+      'The bot picks your newest upload. You can also attach the image straight to that command.'
+    )
+    .addFields(
+      { name: '✅ Worked example', value:
+        '```\n!tsign Team Vertex ' + placeholders + '\n```\n\n' +
+        '**With a logo:**\n```\n!tbanner Team Vertex\n```', inline: false },
+      { name: '❌ Common mistakes', value: [
+        `**Too few tags** — you need **${partners}** other ${partners === 1 ? 'player' : 'players'} besides yourself.`,
+        `**Too many tags** — **${size}v${size}** is exactly **${size}** players.`,
+        '**No team name** — the bot then uses your nickname.',
+        '**Someone already on a team** — one team per player.',
+        '**A bot** — bots cannot play, so they are refused.'
+      ].join('\n'), inline: false },
+      { name: '📋 All commands', value: [
+        '`!tsign <name> @players` — enter your team',
+        '`!tbanner <team>` — set your logo',
+        '`!t` / `!tteams` — see the tournament and every roster',
+        '`!tleave <team>` — withdraw before the start'
+      ].join('\n'), inline: false }
+    )
+    .setFooter({ text: BRANDING });
+
+  return withThumbnail(embed, guild);
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +487,7 @@ module.exports = {
   roster,
   buildSignupMessage,
   buildRegisterModal,
+  buildLoginGuide,
   buildModePicker,
   buildStylePicker,
   buildModeConfirmed,
