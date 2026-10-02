@@ -11,8 +11,8 @@
 // It is deliberately not the server icon only: withBanner already handles the
 // fallback, so there is one definition of "the banner" rather than two.
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { COLORS, BRANDING, STICKERS, withBanner } = require('./ui');
-const { MODES } = require('./ui');
+const { COLORS, BRANDING, STICKERS, MODES, withBanner } = require('./ui');
+const { REGISTER_BTN, TEAMS_BTN, MY_TEAM_BTN } = require('./tournamentUI');
 
 const FLEXIBLE = [
   '`!tsign Team Vertex @friend` — enter a named team',
@@ -111,21 +111,37 @@ function buildGuideMessage(guild, activeTournament) {
     )
     .setFooter({ text: BRANDING });
 
-  // A disabled button rather than no row at all: Discord refuses a message with
-  // no components only when there are none defined, and a live-looking button
-  // that does nothing would be worse than one that is visibly inactive.
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('tour_register')
-      .setLabel('Register Team')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('📝')
-      .setDisabled(!t || t.status !== 'signup')
-  );
+  // The same pair of rows the sign-up post uses, so the two do not drift apart.
+  // Register is the only thing here a player needs, so it leads; the guide is
+  // there for anyone who scrolled past the tournament channel's own post.
+  const open = !!t && t.status === 'signup';
+  const rows = [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(REGISTER_BTN)
+        .setLabel('Register Team')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('📝')
+        .setDisabled(!open)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(TEAMS_BTN)
+        .setLabel('Teams')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('📋')
+        .setDisabled(!t || !t.teams.length),
+      new ButtonBuilder()
+        .setCustomId(MY_TEAM_BTN)
+        .setLabel('My Team')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('🔎')
+    )
+  ];
 
   // withBanner leaves an embed that already has artwork alone and otherwise adds
   // the guild banner, which is the same treatment every other message here gets.
-  return { embeds: [withBanner(embed, guild)], components: [row] };
+  return { embeds: [withBanner(embed, guild)], components: rows };
 }
 
 // The mode label is resolved lazily so this module does not need the tournament

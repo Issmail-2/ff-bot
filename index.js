@@ -3687,6 +3687,104 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return interaction.reply({ content: '🔄 Bracket refreshed.', flags: 64 });
   }
 
+  // Pin / Unpin on the bracket. Read-only in effect, but it changes the channel,
+  // so it stays behind the admin roles rather than being open like the guide.
+  if (interaction.isButton() && (interaction.customId === tourUI.PIN_BTN || interaction.customId === tourUI.UNPIN_BTN)) {
+    const t = tournament.getActive();
+    if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+    if (!canManageTournament(interaction.member)) {
+      return interaction.reply({ content: '❌ Only tournament admins can pin messages here.', flags: 64 });
+    }
+    const channel = interaction.channel;
+    const unpin = interaction.customId === tourUI.UNPIN_BTN;
+    const msg = unpin ? await fetchMessage(channel, t.messageId || t.signupMessageId) : interaction.message;
+    if (!msg) {
+      return interaction.reply({ content: '⚠️ I could not find that post to act on.', flags: 64 });
+    }
+    if (unpin) {
+      await msg.unpin().catch(e => note('tour-unpin', e));
+      return interaction.reply({ content: '📍 Unpinned.', flags: 64 });
+    }
+    await msg.pin().catch(e => note('tour-pin', e));
+    return interaction.reply({ content: '📌 Pinned.', flags: 64 });
+  }
+
+  // Read-only buttons. Everything they show is already visible on the public
+  // posts, so these are open to everyone and answer ephemerally -- pressing one
+  // should not add noise to the channel for everyone else.
+  if (interaction.isButton() && interaction.customId === tourUI.GUIDE_BTN) {
+    const t = tournament.getActive();
+    return interaction.reply({
+      embeds: [tourUI.buildLoginGuide(t, interaction.guild)],
+      ephemeral: true
+    });
+  }
+
+  if (interaction.isButton() && interaction.customId === tourUI.TEAMS_BTN) {
+    const t = tournament.getActive();
+    if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+    if (!t.teams.length) {
+      return interaction.reply({ content: '📭 No teams have registered yet.', flags: 64 });
+    }
+    const lines = t.teams.map(team => {
+      const mark = team.status === 'eliminated' ? '❌' : team.status === 'champion' ? '🏆' : '⚔️';
+      return `${mark} **${tourUI.clip(team.name, 24)}** — ${tourUI.roster(interaction.guild, team, 180)}`;
+    });
+    const embed = new EmbedBuilder()
+      .setTitle(`${STICKERS.game} 🏆 ${t.name} — Teams (${t.teams.length})`)
+      .setColor(COLORS.primary)
+      .setDescription(tourUI.clip(lines.join('\n'), 4000))
+      .setFooter({ text: BRANDING });
+    return interaction.reply({ embeds: [withThumbnail(embed, interaction.guild)], ephemeral: true });
+  }
+
+  // "My Team" answers privately, so a player can check their own status without
+  // announcing to the channel that they are looking.
+  if (interaction.isButton() && interaction.customId === tourUI.MY_TEAM_BTN) {
+    const t = tournament.getActive();
+    if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+    const team = tournament.teamOfUser(t, interaction.user.id);
+    if (!team) {
+      return interaction.reply({
+        content: `❌ You are not in **${t.name}** yet.\n` +
+          `Type \`!tsign @friend\` in <#${t.channelId}> to enter.`,
+        ephemeral: true
+      });
+    }
+    return interaction.reply({
+      content: team.status === 'champion' ? `👑 Your team won **${t.name}**!`
+        : team.status === 'eliminated'
+          ? `❌ **${team.name}** was knocked out of **${t.name}**.`
+          : `⚔️ **${team.name}** is still in **${t.name}** — good luck!`,
+      embeds: [tourUI.buildTeamCard(t, team, interaction.guild)],
+      ephemeral: true
+    });
+  }
+
+  // Closes sign-ups from the post itself. Gated here rather than trusted from the
+  // button's disabled state, because that state is only a hint.
+  if (interaction.isButton() && interaction.customId === tourUI.CLOSE_SIGNUP_BTN) {
+    const t = tournament.getActive();
+    if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+    if (!canManageTournament(interaction.member)) {
+      return interaction.reply({ content: '❌ Only tournament admins can close sign-ups.', flags: 64 });
+    }
+    if (t.status !== 'signup') {
+      return interaction.reply({ content: '❌ Sign-ups are already closed.', flags: 64 });
+    }
+    t.status = 'ready';
+    tournament.persist();
+    // Delete the post outright rather than editing it: the bracket takes over
+    // this channel when the tournament starts, and two posts would fight for the
+    // pin. The teams are not lost, only the sign-up form.
+    const signup = await fetchMessage(interaction.channel, t.signupMessageId);
+    if (signup) await signup.delete().catch(e => note('tour-signup-delete', e));
+    return interaction.reply({
+      content: `🔒 Sign-ups for **${t.name}** are closed — **${t.teams.length}** team(s) registered.\nStart it with \`!tstart\`.`,
+      ephemeral: true
+    });
+  }
+
   if (interaction.isModalSubmit() && interaction.customId.startsWith('roommodal_')) {
     const matchId = interaction.customId.replace('roommodal_', '');
     console.log(`[MODAL] submit received for match ${matchId}`);
@@ -4729,15 +4827,16 @@ function checkRoster(t, rosterIds) {
   return { ok: true };
 }
 
-// Announces a new team in the tournament channel and repaints the sign-up post.
-// Shared by the button form and !tsign, so both paths look identical to everyone
-// else in the channel.
-async function announceTournamentTeam(t, team, guild) {
+// Refreshes the sign-up post and hands back the team card for a new entry.
+//
+// There is deliberately no public announcement. The sign-up post already carries
+// the registered count and the full roster is one `!tteams` away, so posting a
+// card per team filled the channel with noise and let anyone watch rosters being
+// assembled one message at a time. The confirmation goes back to the captain as
+// an ephemeral reply instead.
+async function confirmTournamentTeam(t, team, guild) {
   await renderSignup(t, guild);
-  const announce = t.channelId ? guild.channels.cache.get(t.channelId) : null;
-  if (announce && announce.isTextBased()) {
-    await announce.send(tourUI.buildRegisteredMessage(t, team, guild)).catch(e => note('tour-announce', e));
-  }
+  return tourUI.buildRegisteredMessage(t, team, guild);
 }
 
 // Turns a captain's nickname into a team name, so `!tsign @friend` works without
@@ -4805,12 +4904,13 @@ async function handleTournamentSign(message) {
   });
   if (!res.ok) return message.reply(tourUI.refusal(res.reason, res));
 
-  await announceTournamentTeam(t, res.team, guild);
-  return message.reply(
-    `✅ **${res.team.name}** is registered for **${t.name}**!\n` +
-    `Roster: ${tourUI.roster(guild, res.team, 300)}\n` +
-    `Add a banner any time with \`!tbanner ${res.team.name}\`.`
-  );
+  const card = await confirmTournamentTeam(t, res.team, guild);
+  return message.reply({
+    content: `✅ **${res.team.name}** is registered for **${t.name}**!\n` +
+      `Roster: ${tourUI.roster(guild, res.team, 300)}\n` +
+      `Add a banner any time with \`!tbanner ${res.team.name}\`.`,
+    embeds: [card.embeds[0]]
+  });
 }
 
 async function handleTournamentRegisterModal(interaction) {
@@ -4842,10 +4942,13 @@ async function handleTournamentRegisterModal(interaction) {
     return interaction.editReply({ content: tourUI.refusal(res.reason, res) });
   }
 
-  await announceTournamentTeam(t, res.team, guild);
+  const card = await confirmTournamentTeam(t, res.team, guild);
 
   return interaction.editReply({
-    content: `✅ **${res.team.name}** is registered for **${t.name}**!\nAdd a banner any time with \`!tbanner ${res.team.name}\`.`
+    content: `✅ **${res.team.name}** is registered for **${t.name}**!\n` +
+      `Roster: ${tourUI.roster(guild, res.team, 300)}\n` +
+      `Add a banner any time with \`!tbanner ${res.team.name}\`.`,
+    embeds: [card.embeds[0]]
   });
 }
 

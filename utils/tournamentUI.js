@@ -58,6 +58,13 @@ function mentionLine(guild, team, max = 950) {
 // ---------------------------------------------------------------------------
 const REGISTER_BTN = 'tour_register';
 const NEXT_BTN = 'tour_next';
+const PIN_BTN = 'tour_pin';
+const UNPIN_BTN = 'tour_unpin';
+const CLOSE_SIGNUP_BTN = 'tour_closesignup';
+const START_BTN = 'tour_startnow';
+const MY_TEAM_BTN = 'tour_myteam';
+const GUIDE_BTN = 'tour_guidebtn';
+const TEAMS_BTN = 'tour_teamsbtn';
 const PICK_A = 'tour_win_a_';
 const PICK_B = 'tour_win_b_';
 const MODE_MENU = 'tour_mode_';
@@ -83,24 +90,59 @@ function buildSignupMessage(t, guild) {
         `For ${t.teamSize}v${t.teamSize}, tag **${t.teamSize - 1}** other player${t.teamSize === 2 ? '' : 's'}.`,
         'Add a name with `!tsign Team Vertex @friend`, or let the bot use your nickname.',
         `**Step 2** — upload your logo, then \`!tbanner Team Vertex\`.`,
-        '**Not sure of the format? Type `!tlogin`** for a line you can copy.',
+        '**Not sure of the format? Type `!tlogin`** or press **📋 How to sign up**.',
         'A **single loss eliminates** your team — no second chances.'
       ].join('\n'), inline: false }
     )
     .setFooter({ text: BRANDING }), guild);
 
-  // Discord needs at least one component on the message or it refuses it, so a
-  // closed sign-up still renders the button in a disabled state.
-  const row = new ActionRowBuilder().addComponents(
+  const open = t.status === 'signup';
+  const rows = [];
+
+  // Row 1: the two things a player actually does.
+  rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(REGISTER_BTN)
       .setLabel('Register Team')
       .setStyle(ButtonStyle.Primary)
       .setEmoji('📝')
-      .setDisabled(t.status !== 'signup')
-  );
+      .setDisabled(!open),
+    new ButtonBuilder()
+      .setCustomId(MY_TEAM_BTN)
+      .setLabel('My Team')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🔎')
+  ));
 
-  return { embeds: [embed], components: [row] };
+  // Row 2: reference and housekeeping. Everything here is safe for anyone to
+  // press -- the guide, the team list and a refresh are all read-only -- except
+  // Close Sign-ups, which is admin-only and gated in the handler.
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(GUIDE_BTN)
+      .setLabel('How to sign up')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📋'),
+    new ButtonBuilder()
+      .setCustomId(TEAMS_BTN)
+      .setLabel('Teams')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📋')
+      .setDisabled(!t.teams.length),
+    new ButtonBuilder()
+      .setCustomId(PIN_BTN)
+      .setLabel('Pin')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📌'),
+    new ButtonBuilder()
+      .setCustomId(CLOSE_SIGNUP_BTN)
+      .setLabel('Close Sign-ups')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒')
+      .setDisabled(!open)
+  ));
+
+  return { embeds: [embed], components: rows };
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +445,9 @@ function buildBracketMessage(t, guild) {
   embed.setFooter({ text: BRANDING });
 
   const parts = { embeds: [withBanner(embed, guild)], components: [] };
+
+  // Row 1: the decision. One button per team, so nobody has to remember a name
+  // and type it exactly.
   if (live) {
     const a = T.getTeam(t, live.match.a);
     const b = T.getTeam(t, live.match.b);
@@ -418,12 +463,44 @@ function buildBracketMessage(t, guild) {
     ));
   }
 
+  // Row 2: read-only reference. Safe for anyone to press -- the guide and the
+  // team list reveal nothing that is not already on the bracket post.
+  parts.components.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(TEAMS_BTN)
+      .setLabel('Teams')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📋'),
+    new ButtonBuilder()
+      .setCustomId(MY_TEAM_BTN)
+      .setLabel('My Team')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🔎'),
+    new ButtonBuilder()
+      .setCustomId(GUIDE_BTN)
+      .setLabel('How to sign up')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📖')
+  ));
+
+  // Row 3: housekeeping. Refresh and Pin are harmless; Unpin is admin-only and
+  // gated in the handler rather than trusted from the button state.
   parts.components.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(NEXT_BTN)
       .setLabel('Refresh')
       .setStyle(ButtonStyle.Secondary)
-      .setEmoji('🔄')
+      .setEmoji('🔄'),
+    new ButtonBuilder()
+      .setCustomId(PIN_BTN)
+      .setLabel('Pin')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📌'),
+    new ButtonBuilder()
+      .setCustomId(UNPIN_BTN)
+      .setLabel('Unpin')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📍')
   ));
 
   return parts;
@@ -449,8 +526,13 @@ function buildChampionMessage(t, champ, guild) {
   return { embeds: [withBanner(embed, guild)] };
 }
 
-// A registration confirmation, sent in-channel so the whole server sees who is
-// in and can check the roster.
+// The confirmation a captain sees after entering a team.
+//
+// Returned as an embed on its own rather than a message payload, so the caller
+// can attach its own content beside it. Every caller sends this ephemerally: the
+// public sign-up post already shows how many teams are in, and !tteams lists the
+// rosters, so posting a card per team into the channel is noise that also lets
+// anyone watch rosters being assembled one message at a time.
 function buildRegisteredMessage(t, team, guild) {
   return { embeds: [buildTeamCard(t, team, guild)] };
 }
@@ -481,6 +563,13 @@ module.exports = {
   NEXT_BTN,
   PICK_A,
   PICK_B,
+  PIN_BTN,
+  UNPIN_BTN,
+  CLOSE_SIGNUP_BTN,
+  START_BTN,
+  MY_TEAM_BTN,
+  GUIDE_BTN,
+  TEAMS_BTN,
   MODE_MENU,
   STYLE_MENU,
   clip,
