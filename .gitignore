@@ -52,3 +52,4 @@ verify-errors.js
 audit-catches.js
 verify-tournament.js
 verify-prefixes.js
+verify-perms.js

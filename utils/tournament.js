@@ -12,6 +12,7 @@
 // without coalescing each of those would rewrite the file separately.
 const fs = require('fs');
 const path = require('path');
+const { MODES, STYLES } = require('./ui');
 
 // Overridable so the bracket logic can be exercised against a scratch file
 // instead of the live tournament state.
@@ -300,6 +301,11 @@ function createTournament({ name, teamSize, channelId, createdBy }) {
     createdBy: createdBy || null,
     createdAt: Date.now(),
     status: 'signup',
+    // Which game mode this tournament is played in. Null until the organiser
+    // picks one, at which point style holds the visual style too. Both are
+    // decided by the admin, so neither is asked of the teams.
+    mode: null,
+    style: null,
     teams: [],
     rounds: [],
     champion: null,
@@ -310,6 +316,39 @@ function createTournament({ name, teamSize, channelId, createdBy }) {
   state.active = t;
   persist();
   return { ok: true, tournament: t };
+}
+
+// Records the mode (and style, where the mode has one) the organiser chose.
+// Kept separate from createTournament because the choice arrives from an
+// ephemeral admin-only menu afterwards rather than from the command itself.
+//
+// The style is replaced rather than merged: only amo-yes carries one, so
+// choosing amo must clear a style left over from a previous amo-yes pick.
+// Stale artwork from a mode that no longer applies is worse than none at all.
+function setMode(t, mode, style) {
+  if (!t) return { ok: false, reason: 'no_active_tournament' };
+  if (t.status !== 'signup') return { ok: false, reason: 'signups_closed' };
+  const known = MODES.some(m => m.value === mode);
+  if (!known) return { ok: false, reason: 'bad_mode' };
+
+  // amo-yes is the only mode with a style, so it is also the only one where a
+  // style argument is meaningful. A bad style name is ignored rather than
+  // refused: the mode is still a valid choice and the organiser can correct the
+  // style on the next pick.
+  t.style = (mode === 'ammo' && STYLES.some(s => s.value === style)) ? style : null;
+  t.mode = mode;
+  persist();
+  return { ok: true, mode, style: t.style };
+}
+
+function modeLabel(t) {
+  const m = MODES.find(x => x.value === (t && t.mode));
+  return m ? m.label : null;
+}
+
+function styleLabel(t) {
+  const s = STYLES.find(x => x.value === (t && t.style));
+  return s ? s.label : null;
 }
 
 // Validates a registration and returns a plain reason string on refusal, so the
@@ -501,6 +540,9 @@ module.exports = {
   getProgress,
   qualifiedLine,
   createTournament,
+  setMode,
+  modeLabel,
+  styleLabel,
   registerTeam,
   removeTeam,
   setBanner,

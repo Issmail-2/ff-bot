@@ -10,11 +10,13 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle
 } = require('discord.js');
-const { COLORS, BRANDING, STICKERS, withThumbnail, withBanner } = require('./ui');
+const { COLORS, BRANDING, STICKERS, MODES, STYLES, withThumbnail, withBanner } = require('./ui');
 const T = require('./tournament');
 
 // Discord rejects a field value over 1024 characters and an embed description
@@ -58,14 +60,20 @@ const REGISTER_BTN = 'tour_register';
 const NEXT_BTN = 'tour_next';
 const PICK_A = 'tour_win_a_';
 const PICK_B = 'tour_win_b_';
+const MODE_MENU = 'tour_mode_';
+const STYLE_MENU = 'tour_style_';
 
 function buildSignupMessage(t, guild) {
+  const mode = T.modeLabel(t);
+  const style = T.styleLabel(t);
+
   const embed = withThumbnail(new EmbedBuilder()
     .setTitle(`${STICKERS.game} 🏆 ${t.name}`)
     .setColor(COLORS.gold)
     .setDescription(
       `Sign your team up below. Once enough teams are in, an admin starts the bracket.\n\n` +
       `**📏 Format**  ${t.teamSize}v${t.teamSize} — **${t.teamSize} players per team**\n` +
+      (mode ? `**🎮 Mode**  **${mode}**${style ? ` · ${style}` : ''}\n` : '') +
       `**👥 Registered**  **${t.teams.length}** team${t.teams.length === 1 ? '' : 's'}\n` +
       `**🚪 Sign-ups**  ${t.status === 'signup' ? '**OPEN**' : '**CLOSED**'}`
     )
@@ -92,6 +100,84 @@ function buildSignupMessage(t, guild) {
   );
 
   return { embeds: [embed], components: [row] };
+}
+
+// ---------------------------------------------------------------------------
+// Mode / style picker -- admin only, ephemeral
+//
+// Shown as a follow-up to !tcreate so the organiser does not have to remember
+// the mode names or their exact spelling. amo-yes asks for a style on top, which
+// is why this is two steps rather than one longer menu.
+// ---------------------------------------------------------------------------
+function buildModePicker(t) {
+  const embed = new EmbedBuilder()
+    .setTitle(`${STICKERS.game} 🏆 ${t.name} — pick a mode`)
+    .setColor(COLORS.primary)
+    .setDescription(
+      `**Format**  ${t.teamSize}v${t.teamSize}\n\n` +
+      `Choose which mode this tournament is played in. Only you can see this.`
+    )
+    .setFooter({ text: BRANDING });
+
+  const row = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(MODE_MENU + t.id)
+      .setPlaceholder('🎮 Choose a mode…')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(MODES.map(m =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(m.label)
+          .setDescription(m.desc)
+          .setValue(m.value)
+          .setEmoji(m.emoji)
+      ))
+  );
+
+  return { embeds: [embed], components: [row], ephemeral: true };
+}
+
+function buildStylePicker(t) {
+  const embed = new EmbedBuilder()
+    .setTitle(`${STICKERS.game} 🏆 ${t.name} — pick a style`)
+    .setColor(COLORS.primary)
+    .setDescription(
+      `**Mode**  **amo-yes**\n\n` +
+      `Pick the lobby style for this tournament. Only you can see this.`
+    )
+    .setFooter({ text: BRANDING });
+
+  const row = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(STYLE_MENU + t.id)
+      .setPlaceholder('🎨 Choose a style…')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(STYLES.map(s =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(s.label)
+          .setDescription(s.desc)
+          .setValue(s.value)
+          .setEmoji(s.emoji)
+      ))
+  );
+
+  return { embeds: [embed], components: [row], ephemeral: true };
+}
+
+// Confirmation after a choice is made. Ephemeral, because the choice is already
+// written on the public sign-up post and repeating it there adds nothing.
+function buildModeConfirmed(t, mode, style, guild) {
+  const embed = new EmbedBuilder()
+    .setTitle(`${STICKERS.game} 🏆 Mode set`)
+    .setColor(COLORS.success)
+    .setDescription(
+      `**${t.name}** is now **${mode}**` +
+      (style ? ` with **${style}**` : '') +
+      `.\n\nThe sign-up post has been updated.`
+    )
+    .setFooter({ text: BRANDING });
+  return { embeds: [withThumbnail(embed, guild)], ephemeral: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +226,8 @@ function buildTeamCard(t, team, guild) {
   const status = team.status === 'champion' ? '🏆 Champion'
     : team.status === 'eliminated' ? '❌ Eliminated'
     : '⚔️ Active';
+  const mode = T.modeLabel(t);
+  const style = T.styleLabel(t);
 
   const embed = new EmbedBuilder()
     .setTitle(`${STICKERS.game} ${team.name}`)
@@ -148,6 +236,7 @@ function buildTeamCard(t, team, guild) {
     .setDescription(
       `**Status**  ${status}\n` +
       `**Format**  ${t.teamSize}v${t.teamSize}\n` +
+      (mode ? `**🎮 Mode**  ${mode}${style ? ` · ${style}` : ''}\n` : '') +
       `**Record**  ${team.wins || 0}W / ${team.losses || 0}L\n` +
       `**Seed**  #${team.seed}`
     )
@@ -189,6 +278,9 @@ function buildBracketMessage(t, guild) {
     header = `⏳ **No match is waiting for a result.** An admin decides each matchup with the buttons below.`;
   }
 
+  const mode = T.modeLabel(t);
+  const style = T.styleLabel(t);
+
   const embed = new EmbedBuilder()
     .setTitle(`${STICKERS.game} 🏆 ${t.name}`)
     .setColor(COLORS.primary)
@@ -196,7 +288,8 @@ function buildBracketMessage(t, guild) {
       `${header}\n` +
       `${'─'.repeat(24)}\n` +
       `**👥 Teams**  ${alive.length} alive of ${p.total}\n` +
-      `**🎯 Format**  ${t.teamSize}v${t.teamSize}`,
+      `**🎯 Format**  ${t.teamSize}v${t.teamSize}` +
+      (mode ? `\n**🎮 Mode**  ${mode}${style ? ` · ${style}` : ''}` : ''),
       4000
     ));
 
@@ -325,10 +418,15 @@ module.exports = {
   NEXT_BTN,
   PICK_A,
   PICK_B,
+  MODE_MENU,
+  STYLE_MENU,
   clip,
   roster,
   buildSignupMessage,
   buildRegisterModal,
+  buildModePicker,
+  buildStylePicker,
+  buildModeConfirmed,
   buildTeamCard,
   buildBracketMessage,
   buildChampionMessage,

@@ -45,20 +45,14 @@ function sizeLabel(n) {
 // first because it decides which channel the match belongs to, but the size
 // dropdown is live from the start so a player who already knows they want 4v4
 // in the default mode can do it in one interaction.
+//
+// The mode and style lists themselves are in utils/ui now -- see the note on the
+// re-export above.
 // ---------------------------------------------------------------------------
-const MODES = [
-  { value: 'amo', label: 'amo-no', emoji: '⚔️', desc: 'Normal custom room' },
-  { value: 'ammo', label: 'amo-yes', emoji: '🎯', desc: 'Custom room with a style' },
-  { value: 'esport', label: 'e-sport', emoji: '🏆', desc: 'Esport lobby and points' }
-];
-
-// "PvP Yes" matches ask which visual style to apply to the lobby artwork before
-// the room details are collected.
-const STYLES = [
-  { value: 'apostado', label: 'Apostado Style', emoji: '🟥', desc: 'Classic red apuesta lobby look' },
-  { value: 'zelika', label: 'Zelika Style', emoji: '🟣', desc: 'Purple Zelika themed lobby' },
-  { value: 'highlight', label: 'Highlight Style', emoji: '🟡', desc: 'Gold highlight lobby look' }
-];
+// The mode and style lists now live in utils/ui so the tournament picker and this
+// one cannot drift apart. They are re-exported from here because everything in
+// this module already refers to them by these names.
+const { MODES, STYLES } = require('./ui');
 const STYLE_CUSTOM_ID = `${CUSTOM_ID}_style`;
 
 function buildStylePicker(userId, guild, size) {

@@ -121,10 +121,27 @@ const CHECK_CHANNEL_ID = process.env.CHECK_CHANNEL_ID || '1546846854556286976';
 const EXPOSE_CHANNEL_ID = process.env.EXPOSE_CHANNEL_ID || '1518059555622228038';
 const APPLY_CATEGORY_ID = process.env.APPLY_CATEGORY_ID || '1476278897107538023';
 const APPLY_QUEUE_CHANNEL_ID = process.env.APPLY_QUEUE_CHANNEL_ID || '1450844020853968896';
-// The one channel a tournament is hosted in. Left empty on purpose until the
-// real id is set: while it is empty, !tcreate falls back to whichever channel it
-// is run in, which is the old behaviour and needs no configuration.
-const TOURNAMENT_CHANNEL_ID = process.env.TOURNAMENT_CHANNEL_ID || config.tournamentChannelId || '';
+// The one channel a tournament is hosted in. The sign-up post and the bracket
+// both live here, so a tournament always has one predictable home.
+const TOURNAMENT_CHANNEL_ID = process.env.TOURNAMENT_CHANNEL_ID || config.tournamentChannelId || '1555488260376105060';
+
+// The two roles that run tournaments. Deliberately NOT config.adminRoles: this is
+// a much smaller, separate list, so giving someone the tournament does not also
+// hand them !clear, !setpoints and the rest of the admin surface.
+const TOURNAMENT_ADMIN_ROLE_IDS = [
+  '1476325270326608083',
+  '1548338723593392198'
+];
+
+// Tournament control is its own permission check, separate from hasCommandAccess.
+// canSetResult is deliberately not used either: that list includes the result
+// roles, and being able to settle a normal match is not the same authority as
+// running a tournament.
+function canManageTournament(member) {
+  if (!member) return false;
+  if (member.permissions && member.permissions.has('Administrator')) return true;
+  return TOURNAMENT_ADMIN_ROLE_IDS.some(id => member.roles && member.roles.cache.has(id));
+}
 const REPORT_COST = parseInt(process.env.REPORT_COST || '', 10) || 50;
 const REPORT_REWARD = parseInt(process.env.REPORT_REWARD || '', 10) || 100;
 
@@ -3639,6 +3656,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return await handleTournamentRegisterModal(interaction);
   }
 
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith(tourUI.MODE_MENU)) {
+    return await handleTournamentModeMenu(interaction);
+  }
+
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith(tourUI.STYLE_MENU)) {
+    return await handleTournamentStyleMenu(interaction);
+  }
+
   if (interaction.isButton() && (interaction.customId.startsWith(tourUI.PICK_A) || interaction.customId.startsWith(tourUI.PICK_B))) {
     return await handleTournamentPick(interaction);
   }
@@ -3646,8 +3671,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isButton() && interaction.customId === tourUI.NEXT_BTN) {
     const t = tournament.getActive();
     if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
-    if (!canSetResult(interaction.member)) {
-      return interaction.reply({ content: '❌ Only staff can refresh the bracket.', flags: 64 });
+    if (!canManageTournament(interaction.member)) {
+      return interaction.reply({ content: '❌ Only tournament admins can refresh the bracket.', flags: 64 });
     }
     await renderTournament(t, interaction.guild);
     return interaction.reply({ content: '🔄 Bracket refreshed.', flags: 64 });
@@ -4679,10 +4704,67 @@ async function handleTournamentRegisterModal(interaction) {
   });
 }
 
+// The mode menu from !tcreate. Only amo-yes asks for a style, so the other two
+// finish here; amo-yes gets a second, equally ephemeral menu.
+async function handleTournamentModeMenu(interaction) {
+  const guild = interaction.guild;
+  const t = tournament.getActive();
+
+  if (!canManageTournament(interaction.member)) {
+    return interaction.reply({ content: '❌ Only tournament admins can set the mode.', flags: 64 });
+  }
+  if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+  if (interaction.customId !== tourUI.MODE_MENU + t.id) {
+    return interaction.reply({ content: '⚠️ That menu is for a tournament that has ended. Run `!tcreate` again.', flags: 64 });
+  }
+  if (t.status !== 'signup') {
+    return interaction.reply({ content: '❌ Sign-ups are closed, so the mode can no longer change.', flags: 64 });
+  }
+
+  const mode = interaction.values[0];
+  const res = tournament.setMode(t, mode, null);
+  if (!res.ok) {
+    return interaction.reply({ content: '❌ That mode could not be set.', flags: 64 });
+  }
+
+  // amo-yes is the mode that carries a visual style, so it is the one that asks.
+  if (mode === 'ammo') {
+    return interaction.reply(tourUI.buildStylePicker(t));
+  }
+
+  await renderSignup(t, guild);
+  return interaction.reply(tourUI.buildModeConfirmed(t, tournament.modeLabel(t), null, guild));
+}
+
+async function handleTournamentStyleMenu(interaction) {
+  const guild = interaction.guild;
+  const t = tournament.getActive();
+
+  if (!canManageTournament(interaction.member)) {
+    return interaction.reply({ content: '❌ Only tournament admins can set the style.', flags: 64 });
+  }
+  if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+  if (interaction.customId !== tourUI.STYLE_MENU + t.id) {
+    return interaction.reply({ content: '⚠️ That menu is for a tournament that has ended. Run `!tcreate` again.', flags: 64 });
+  }
+  if (t.status !== 'signup') {
+    return interaction.reply({ content: '❌ Sign-ups are closed, so the style can no longer change.', flags: 64 });
+  }
+
+  const style = interaction.values[0];
+  const res = tournament.setMode(t, 'ammo', style);
+  if (!res.ok) {
+    return interaction.reply({ content: '❌ That style could not be set.', flags: 64 });
+  }
+
+  await renderSignup(t, guild);
+  return interaction.reply(tourUI.buildModeConfirmed(t, tournament.modeLabel(t), tournament.styleLabel(t), guild));
+}
+
 async function handleTournamentPick(interaction) {
   const guild = interaction.guild;
-  if (!canSetResult(interaction.member)) {
-    return interaction.reply({ content: '❌ Only staff can decide a tournament result.', flags: 64 });
+  if (!canManageTournament(interaction.member)) {
+    return interaction.reply({ content: '❌ Only tournament admins can decide a result.', flags: 64 });
   }
   const t = tournament.getActive();
   if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
@@ -4740,7 +4822,7 @@ async function handleTournamentCommand(message, content) {
   }
 
   if (content.startsWith('!tcreate')) {
-    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can create a tournament.');
+    if (!canManageTournament(member)) return message.reply('❌ Only tournament admins can create one.');
     const already = tournament.getActive();
     if (already) {
       return message.reply(`⚠️ **${already.name}** is already running. Finish or cancel it with \`!tcancel\` first.`);
@@ -4779,11 +4861,19 @@ async function handleTournamentCommand(message, content) {
     if (!res.ok) return message.reply('❌ Could not create the tournament.');
 
     await renderSignup(res.tournament, guild, host);
-    return message.reply(`🏆 **${res.tournament.name}** created! Format **${res.tournament.teamSize}v${res.tournament.teamSize}**. Teams can register below.`);
+
+    // The mode is asked as a follow-up rather than in the command, so the
+    // organiser picks from a menu instead of having to remember the exact
+    // names. Ephemeral: the choice is for them, and the public sign-up post
+    // already shows it once made.
+    const picker = await message.reply({ ...tourUI.buildModePicker(res.tournament), ephemeral: true })
+      .catch(e => note('tour-mode-picker', e));
+
+    return message.reply(`🏆 **${res.tournament.name}** created! Format **${res.tournament.teamSize}v${res.tournament.teamSize}**. Teams can register below.${picker ? '' : '\n⚠️ I could not show the mode picker — set it with `!tmode <mode> [style]`.'}`);
   }
 
   if (content.startsWith('!tstart')) {
-    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can start the tournament.');
+    if (!canManageTournament(member)) return message.reply('❌ Only tournament admins can start a tournament.');
     const t = tournament.getActive();
     if (!t) return message.reply('❌ There is no tournament running.');
     const res = tournament.startTournament(t);
@@ -4802,9 +4892,10 @@ async function handleTournamentCommand(message, content) {
   }
 
   if (content.startsWith('!twin')) {
-    // The same role set that can settle a normal match decides a tournament
-    // matchup, so there is one answer to "who is allowed to award a win".
-    if (!canSetResult(member)) return message.reply('❌ Only staff can decide a tournament result.');
+    // Tournament control is its own role list rather than setResultRoles: being
+    // able to settle a normal match is not the same authority as running a
+    // tournament and deciding who is knocked out of one.
+    if (!canManageTournament(member)) return message.reply('❌ Only tournament admins can decide a result.');
     const t = tournament.getActive();
     if (!t) return message.reply('❌ There is no tournament running.');
     const live = tournament.getLiveMatch(t);
@@ -4827,8 +4918,8 @@ async function handleTournamentCommand(message, content) {
     if (!team) return message.reply('❌ No team matched that name. Check `!tteams`.');
 
     const isCaptain = team.captainId === member.id;
-    if (!isCaptain && !hasCommandAccess(member)) {
-      return message.reply(`❌ Only **${team.name}**'s captain or an admin can set its banner.`);
+    if (!isCaptain && !canManageTournament(member)) {
+      return message.reply(`❌ Only **${team.name}**'s captain or a tournament admin can set its banner.`);
     }
     if (t.status === 'finished') return message.reply('❌ This tournament is over.');
 
@@ -4873,8 +4964,8 @@ async function handleTournamentCommand(message, content) {
     const team = tournament.findTeam(t, raw.replace(/^&?!tleave\s*/i, '').trim());
     if (!team) return message.reply('❌ No team matched that name.');
     const isCaptain = team.captainId === member.id;
-    if (!isCaptain && !hasCommandAccess(member)) {
-      return message.reply(`❌ Only **${team.name}**'s captain or an admin can withdraw it.`);
+    if (!isCaptain && !canManageTournament(member)) {
+      return message.reply(`❌ Only **${team.name}**'s captain or a tournament admin can withdraw it.`);
     }
     const res = tournament.removeTeam(t, team.id);
     if (!res.ok) return message.reply('❌ Sign-ups are closed, so teams can no longer withdraw.');
@@ -4882,8 +4973,32 @@ async function handleTournamentCommand(message, content) {
     return message.reply(`🚪 **${team.name}** withdrew from **${t.name}**.`);
   }
 
+  if (content.startsWith('!tmode')) {
+    if (!canManageTournament(member)) return message.reply('❌ Only tournament admins can set the mode.');
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+
+    const rest = raw.replace(/^&?!tmode\s*/i, '').trim();
+    if (!rest) {
+      const mode = tournament.modeLabel(t);
+      const style = tournament.styleLabel(t);
+      return message.reply(`🎮 Current mode: **${mode || 'not set'}**${style ? ` · ${style}` : ''}\n` +
+        'Usage: `!tmode <amo|ammo|esport> [apostado|zelika|highlight]`');
+    }
+
+    const parts = rest.split(/\s+/);
+    const res = tournament.setMode(t, parts[0].toLowerCase(), parts[1] ? parts[1].toLowerCase() : null);
+    if (!res.ok) {
+      return message.reply(res.reason === 'bad_mode'
+        ? '❌ Unknown mode. Use `amo`, `ammo` or `esport`.'
+        : '❌ Sign-ups are closed, so the mode can no longer change.');
+    }
+    await renderSignup(t, guild);
+    return message.reply(`🎮 Mode set to **${tournament.modeLabel(t)}**${res.style ? ` · ${tournament.styleLabel(t)}` : ''}.`);
+  }
+
   if (content === '!tclose') {
-    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can close sign-ups.');
+    if (!canManageTournament(member)) return message.reply('❌ Only tournament admins can close sign-ups.');
     const t = tournament.getActive();
     if (!t) return message.reply('❌ There is no tournament running.');
     if (t.status !== 'signup') return message.reply('❌ Sign-ups are already closed.');
@@ -4895,7 +5010,7 @@ async function handleTournamentCommand(message, content) {
   }
 
   if (content === '!tcancel') {
-    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can cancel a tournament.');
+    if (!canManageTournament(member)) return message.reply('❌ Only tournament admins can cancel a tournament.');
     const t = tournament.getActive();
     if (!t) return message.reply('❌ There is no tournament running.');
     const res = tournament.cancel(t, member.id);
@@ -4904,7 +5019,7 @@ async function handleTournamentCommand(message, content) {
   }
 
   if (content === '!tarchive') {
-    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can archive a tournament.');
+    if (!canManageTournament(member)) return message.reply('❌ Only tournament admins can archive a tournament.');
     const t = tournament.getActive();
     if (!t) return message.reply('❌ There is no tournament running.');
     if (t.status !== 'finished') return message.reply('❌ That tournament has not finished yet.');

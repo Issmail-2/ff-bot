@@ -57,6 +57,23 @@ function normalizeEmoji(value, key) {
   return EMOJI_FALLBACK[key] || '';
 }
 
+// The game modes a match can be hosted in, and the visual styles available to
+// the ones that ask for one. This is the same list !play offers, kept here so
+// the tournament picker and the play picker cannot drift apart -- two copies of
+// this is how a mode ends up offered in one flow and missing from the other.
+const MODES = [
+  { value: 'amo', label: 'amo-no', emoji: '⚔️', desc: 'Normal custom room' },
+  { value: 'ammo', label: 'amo-yes', emoji: '🎯', desc: 'Custom room with a style' },
+  { value: 'esport', label: 'e-sport', emoji: '🏆', desc: 'Esport lobby and points' }
+];
+
+// Only amo-yes asks which look to use for the lobby artwork.
+const STYLES = [
+  { value: 'apostado', label: 'Apostado Style', emoji: '🟥', desc: 'Classic red apuesta lobby look' },
+  { value: 'zelika', label: 'Zelika Style', emoji: '🟣', desc: 'Purple Zelika themed lobby' },
+  { value: 'highlight', label: 'Highlight Style', emoji: '🟡', desc: 'Gold highlight lobby look' }
+];
+
 // Reads config.json the same way the rest of the bot does and returns a
 // ready-to-use sticker set, so every module can render the same artwork.
 function loadStickers() {
@@ -211,6 +228,6 @@ function note(context, e) {
 }
 
 module.exports = {
-  COLORS, BRANDING, STICKERS, normalizeEmoji, fetchMessage, note,
+  COLORS, BRANDING, STICKERS, MODES, STYLES, normalizeEmoji, fetchMessage, note,
   progressBar, slotStrip, divider, createEmbed, withThumbnail, withBanner
 };
