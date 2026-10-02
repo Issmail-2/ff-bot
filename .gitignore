@@ -50,3 +50,5 @@ verify-fetch.js
 verify-picker2.js
 verify-errors.js
 audit-catches.js
+verify-tournament.js
+verify-prefixes.js

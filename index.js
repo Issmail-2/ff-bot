@@ -106,11 +106,13 @@ const storeModule = require('./utils/store');
 const settingsStore = require('./utils/settings');
 const backfillBanner = require('./utils/backfillBanner');
 const cheaterReports = require('./utils/cheaterReports');
-const { COLORS, BRANDING, progressBar, slotStrip, divider, withThumbnail, withBanner, fetchMessage, note } = require('./utils/ui');
+const { COLORS, BRANDING, STICKERS, progressBar, slotStrip, divider, withThumbnail, withBanner, fetchMessage, note } = require('./utils/ui');
 const maintenance = require('./utils/maintenance');
 const inviteTracker = require('./utils/invites');
 const slash = require('./utils/slash');
 const playFlow = require('./utils/playFlow');
+const tournament = require('./utils/tournament');
+const tourUI = require('./utils/tournamentUI');
 
 const EXPOSE_CATEGORY_ID = process.env.EXPOSE_CATEGORY_ID || '1539831526470979646';
 const CHEATER_ROLE_ID = process.env.CHEATER_ROLE_ID || '1540120101792129145';
@@ -3611,6 +3613,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit() && interaction.customId.startsWith('cheatmodal_')) {
     return await handleCheatModal(interaction);
   }
+  // --- Tournament ---------------------------------------------------------
+  // Registered before the match routing so a tournament id can never be read as
+  // a match id by a handler that shares the same shape of custom id.
+  if (interaction.isButton() && interaction.customId === tourUI.REGISTER_BTN) {
+    const t = tournament.getActive();
+    if (!t) {
+      return interaction.reply({ content: '❌ There is no tournament running right now.', flags: 64 });
+    }
+    if (t.status !== 'signup') {
+      return interaction.reply({ content: '❌ Sign-ups for this tournament are closed.', flags: 64 });
+    }
+    const onTeam = tournament.teamOfUser(t, interaction.user.id);
+    if (onTeam) {
+      return interaction.reply({ content: `❌ You are already registered with **${onTeam.name}**. One team per player.`, flags: 64 });
+    }
+    return interaction.showModal(tourUI.buildRegisterModal(t));
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('tourmodal_')) {
+    return await handleTournamentRegisterModal(interaction);
+  }
+
+  if (interaction.isButton() && (interaction.customId.startsWith(tourUI.PICK_A) || interaction.customId.startsWith(tourUI.PICK_B))) {
+    return await handleTournamentPick(interaction);
+  }
+
+  if (interaction.isButton() && interaction.customId === tourUI.NEXT_BTN) {
+    const t = tournament.getActive();
+    if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+    if (!canSetResult(interaction.member)) {
+      return interaction.reply({ content: '❌ Only staff can refresh the bracket.', flags: 64 });
+    }
+    await renderTournament(t, interaction.guild);
+    return interaction.reply({ content: '🔄 Bracket refreshed.', flags: 64 });
+  }
+
   if (interaction.isModalSubmit() && interaction.customId.startsWith('roommodal_')) {
     const matchId = interaction.customId.replace('roommodal_', '');
     console.log(`[MODAL] submit received for match ${matchId}`);
@@ -4453,11 +4491,431 @@ async function buildRankResponse(message, targetId, mode) {
   return message.reply({ embeds: [embed] });
 }
 
+// ---------------------------------------------------------------------------
+// Tournament
+//
+// Bracket-only: a tournament matchup does not open a Free Fire room, so none of
+// this needs the room modal, the voice requirement or the join timeout that
+// !play uses. Teams register, an admin starts the bracket, and an admin declares
+// the winner of each matchup. One loss eliminates a team.
+// ---------------------------------------------------------------------------
+
+// The bracket is one post that is edited as results land, rather than a new
+// message per result. A reposted bracket scrolls the earlier rounds out of
+// reach and leaves a channel full of near-identical messages.
+async function renderTournament(t, guild, channelOverride) {
+  const channel = channelOverride
+    || (t && t.channelId ? guild.channels.cache.get(t.channelId) : null);
+  if (!channel || !channel.isTextBased()) return null;
+
+  const payload = tourUI.buildBracketMessage(t, guild);
+  const existing = await fetchMessage(channel, t.messageId);
+
+  if (existing) {
+    await existing.edit(payload).catch(e => note('tour-edit', e));
+    return existing;
+  }
+
+  // No usable message id -- either this bracket has never been posted or the
+  // post was deleted. Either way the tournament still needs somewhere to show
+  // results, so post a new one and re-point the state at it.
+  const msg = await channel.send(payload).catch(e => note('tour-send', e));
+  if (msg) tournament.setMessageId(t, msg.id);
+  return msg;
+}
+
+// Same idea for the sign-up post, which is a separate message from the bracket.
+async function renderSignup(t, guild, channelOverride) {
+  const channel = channelOverride
+    || (t && t.channelId ? guild.channels.cache.get(t.channelId) : null);
+  if (!channel || !channel.isTextBased()) return null;
+
+  const payload = tourUI.buildSignupMessage(t, guild);
+  const existing = await fetchMessage(channel, t.signupMessageId);
+
+  if (existing) {
+    await existing.edit(payload).catch(e => note('tour-signup-edit', e));
+    return existing;
+  }
+
+  const msg = await channel.send(payload).catch(e => note('tour-signup-send', e));
+  if (msg) tournament.setSignupMessageId(t, msg.id);
+  return msg;
+}
+
+// Finds the most recent image posted in the channel so a team can attach its
+// banner by simply uploading it and running !tbanner. Only the requester's own
+// upload is accepted, otherwise any member could slap their picture onto
+// somebody else's team.
+async function newestOwnImage(channel, authorId, limit = 25) {
+  const msgs = await channel.messages.fetch({ limit }).catch(e => {
+    note('tour-fetch', e);
+    return null;
+  });
+  if (!msgs) return null;
+
+  const ordered = [...msgs.values()]
+    .sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
+
+  for (const m of ordered) {
+    if (!m.attachments || !m.author || m.author.id !== authorId) continue;
+    for (const a of m.attachments.values()) {
+      if (a.contentType && String(a.contentType).startsWith('image/')) return a;
+    }
+  }
+  return null;
+}
+
+// Applies a decision to a matchup and repaints the bracket. Shared by the buttons
+// and by !twin so both paths behave identically. It only mutates and renders --
+// the caller owns the reply, so a result is always reported exactly once.
+async function settleTournamentMatch(t, matchId, winnerId, decidedBy, guild) {
+  const res = tournament.decide(t, matchId, winnerId, decidedBy);
+  if (res.ok) await renderTournament(t, guild);
+  return res;
+}
+
+// Turns a decision into the lines shown to whoever made it.
+function tournamentOutcomeText(t, res) {
+  if (!res || !res.ok) {
+    const text = {
+      no_match: '❌ That matchup no longer exists.',
+      already_decided: '❌ That matchup already has a result.',
+      match_not_live: '❌ That matchup is not ready to be decided.',
+      winner_not_in_match: '❌ That team is not in this matchup.',
+      team_missing: '❌ One of the teams is missing from the state.',
+      not_running: '❌ The tournament has not started yet.'
+    }[res.reason] || '❌ That did not work.';
+    return text;
+  }
+  const lines = [
+    `🏆 **${res.winner.name}** beat **${res.loser.name}**.`,
+    `❌ **${res.loser.name}** is eliminated from **${t.name}**.`
+  ];
+  if (res.champion) lines.push('', `👑 **${res.champion.name} wins ${t.name}!**`);
+  return lines.join('\n');
+}
+
+// Reads a modal field without throwing when the id is absent. The number of
+// partner inputs is derived from the tournament's team size, so a modal built
+// for one tournament must not blow up if it is somehow submitted after the state
+// moved on.
+function safeField(interaction, customId) {
+  try {
+    if (typeof interaction.fields.hasTextInputValue === 'function'
+      && !interaction.fields.hasTextInputValue(customId)) return '';
+    return String(interaction.fields.getTextInputValue(customId) || '').trim();
+  } catch (e) {
+    note('tour-field', e);
+    return '';
+  }
+}
+
+async function handleTournamentRegisterModal(interaction) {
+  const guild = interaction.guild;
+  const t = tournament.getActive();
+
+  if (!t) {
+    return interaction.reply({ content: '❌ There is no tournament running right now.', flags: 64 });
+  }
+  if (t.status !== 'signup') {
+    return interaction.reply({ content: '❌ Sign-ups for this tournament are closed.', flags: 64 });
+  }
+
+  const name = safeField(interaction, 'teamNameInput');
+  const partners = [];
+  for (let i = 0; i < Math.max(1, t.teamSize - 1); i++) {
+    const v = safeField(interaction, `partner${i}Input`);
+    if (v) partners.push(v);
+  }
+
+  await interaction.deferReply({ flags: 64 });
+
+  const already = tournament.teamOfUser(t, interaction.user.id);
+  if (already) {
+    return interaction.editReply({ content: `❌ You are already registered with **${already.name}**. One team per player.` });
+  }
+
+  // Eligibility is checked across the whole roster, not just whoever filled in
+  // the form -- otherwise a captain could register a partner who is jailed or
+  // blacklisted and pull them into the tournament.
+  const rosterIds = [interaction.user.id, ...partners.filter(p => p !== interaction.user.id)];
+  for (const id of rosterIds) {
+    if (!/^\d{15,20}$/.test(id)) {
+      return interaction.editReply({ content: tourUI.refusal('bad_member') });
+    }
+    if (blacklistModule.isBlacklisted(id)) {
+      return interaction.editReply({ content: `❌ <@${id}> is blacklisted and cannot enter a tournament.` });
+    }
+    if (jailModule.getJail(id)) {
+      return interaction.editReply({ content: `❌ <@${id}> is jailed and cannot enter a tournament.` });
+    }
+    const on = tournament.teamOfUser(t, id);
+    if (on) {
+      return interaction.editReply({ content: tourUI.refusal('player_taken', { playerId: id, teamName: on.name }) });
+    }
+  }
+
+  const res = tournament.registerTeam(t, { name, captainId: interaction.user.id, members: partners });
+  if (!res.ok) {
+    return interaction.editReply({ content: tourUI.refusal(res.reason, res) });
+  }
+
+  await renderSignup(t, guild);
+
+  // Announced in-channel so the whole server can see who is in and check the
+  // roster, rather than only the captain learning that it worked.
+  const announce = t.channelId ? guild.channels.cache.get(t.channelId) : null;
+  if (announce && announce.isTextBased()) {
+    await announce.send(tourUI.buildRegisteredMessage(t, res.team, guild)).catch(e => note('tour-announce', e));
+  }
+
+  return interaction.editReply({
+    content: `✅ **${res.team.name}** is registered for **${t.name}**!\nAdd a banner any time with \`!tbanner ${res.team.name}\`.`
+  });
+}
+
+async function handleTournamentPick(interaction) {
+  const guild = interaction.guild;
+  if (!canSetResult(interaction.member)) {
+    return interaction.reply({ content: '❌ Only staff can decide a tournament result.', flags: 64 });
+  }
+  const t = tournament.getActive();
+  if (!t) return interaction.reply({ content: '❌ There is no tournament running.', flags: 64 });
+
+  const isA = interaction.customId.startsWith(tourUI.PICK_A);
+  const matchId = interaction.customId.slice(isA ? tourUI.PICK_A.length : tourUI.PICK_B.length);
+
+  const found = tournament.findMatch(t, matchId);
+  if (!found) {
+    return interaction.reply({ content: '❌ That matchup no longer exists — the bracket may have moved on.', flags: 64 });
+  }
+
+  // Repainting the bracket is a channel edit, which can outrun the three second
+  // interaction window, so the reply is deferred before the work is done.
+  await interaction.deferReply({ flags: 64 });
+  const res = await settleTournamentMatch(
+    t,
+    matchId,
+    isA ? found.match.a : found.match.b,
+    interaction.user.id,
+    guild
+  );
+  return interaction.editReply({ content: tournamentOutcomeText(t, res) });
+}
+
+async function handleTournamentCommand(message, content) {
+  const guild = message.guild;
+  const raw = message.content.trim();
+  const member = message.member;
+
+  if (content === '!tournament' || content === '!tour' || content === '!t') {
+    const t = tournament.getActive();
+    if (!t) {
+      return message.reply('🏆 No tournament is running right now. An admin can start one with `!tcreate <name> [2v2|3v3|4v4]`.');
+    }
+    const p = tournament.getProgress(t);
+    const champ = p.championId ? tournament.getTeam(t, p.championId) : null;
+    if (champ) return message.reply(tourUI.buildChampionMessage(t, champ, guild));
+
+    const live = tournament.getLiveMatch(t);
+    const a = live ? tournament.getTeam(t, live.match.a) : null;
+    const b = live ? tournament.getTeam(t, live.match.b) : null;
+    const embed = new EmbedBuilder()
+      .setTitle(`${STICKERS.game} 🏆 ${t.name}`)
+      .setColor(COLORS.gold)
+      .setDescription(
+        `**Status**  ${t.status === 'signup' ? '📝 Sign-ups open' : t.status === 'ready' ? '🔒 Sign-ups closed' : '⚔️ In progress'}\n` +
+        `**Format**  ${t.teamSize}v${t.teamSize}\n` +
+        `**Teams**  ${p.alive} alive of ${p.total}\n` +
+        `**Round**  ${p.roundNumber} of ${p.totalRounds}` +
+        (live ? `\n\n▶️ **Next**  ${a ? a.name : 'TBD'} vs ${b ? b.name : 'TBD'}` : '')
+      )
+      .setFooter({ text: BRANDING });
+    return message.reply(withThumbnail(embed, guild));
+  }
+
+  if (content.startsWith('!tcreate')) {
+    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can create a tournament.');
+    const already = tournament.getActive();
+    if (already) {
+      return message.reply(`⚠️ **${already.name}** is already running. Finish or cancel it with \`!tcancel\` first.`);
+    }
+
+    // The size is an optional trailing token so the name can be several words.
+    let name = raw.replace(/^&?!tcreate\s*/i, '').trim();
+    let size = null;
+    const sizeMatch = name.match(/\s*(\d)\s*v\s*(\d)\s*$/i);
+    if (sizeMatch) {
+      size = Number(sizeMatch[1]);
+      name = name.slice(0, sizeMatch.index).trim();
+    }
+    if (!name) return message.reply('Usage: `!tcreate <name> [2v2|3v3|4v4]`');
+    if (size !== null && Number(sizeMatch[2]) !== size) {
+      return message.reply('❌ Use an even format: `2v2`, `3v3` or `4v4`.');
+    }
+    if (size !== null && !tournament.TEAM_SIZES.includes(size)) {
+      return message.reply('❌ Team size must be `2v2`, `3v3` or `4v4`.');
+    }
+
+    const res = tournament.createTournament({
+      name,
+      teamSize: size || 4,
+      channelId: message.channel.id,
+      createdBy: member.id
+    });
+    if (!res.ok) return message.reply('❌ Could not create the tournament.');
+
+    await renderSignup(res.tournament, guild, message.channel);
+    return message.reply(`🏆 **${res.tournament.name}** created! Format **${res.tournament.teamSize}v${res.tournament.teamSize}**. Teams can register below.`);
+  }
+
+  if (content.startsWith('!tstart')) {
+    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can start the tournament.');
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+    const res = tournament.startTournament(t);
+    if (!res.ok) {
+      const msg = {
+        already_started: '❌ This tournament has already started.',
+        too_few_teams: `❌ Only **${t.teams.length}** team(s) registered — you need at least **${tournament.MIN_TEAMS}**.`
+      }[res.reason] || '❌ Could not start the tournament.';
+      return message.reply(msg);
+    }
+    // The sign-up post has done its job; the bracket takes over the channel.
+    const signup = await fetchMessage(message.channel, t.signupMessageId);
+    if (signup) await signup.delete().catch(e => note('tour-signup-delete', e));
+    await renderTournament(t, guild, message.channel);
+    return message.reply(`⚔️ **${t.name}** has started — ${res.rounds} rounds. Staff decide each matchup with the buttons on the bracket.`);
+  }
+
+  if (content.startsWith('!twin')) {
+    // The same role set that can settle a normal match decides a tournament
+    // matchup, so there is one answer to "who is allowed to award a win".
+    if (!canSetResult(member)) return message.reply('❌ Only staff can decide a tournament result.');
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+    const live = tournament.getLiveMatch(t);
+    if (!live) return message.reply('⚠️ There is no matchup waiting for a result.');
+
+    const team = tournament.findTeam(t, raw.replace(/^&?!twin\s*/i, '').trim());
+    if (!team) return message.reply('❌ No team matched that name. Check `!tteams`.');
+    if (team.id !== live.match.a && team.id !== live.match.b) {
+      return message.reply(`❌ **${team.name}** is not in the current matchup.`);
+    }
+    const res = await settleTournamentMatch(t, live.match.id, team.id, member.id, guild);
+    if (!res.ok) return message.reply(tournamentOutcomeText(t, res));
+    return message.reply(`🏆 Round **${live.round.number}** decided — the bracket has been updated.`);
+  }
+
+  if (content.startsWith('!tbanner')) {
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+    const team = tournament.findTeam(t, raw.replace(/^&?!tbanner\s*/i, '').trim());
+    if (!team) return message.reply('❌ No team matched that name. Check `!tteams`.');
+
+    const isCaptain = team.captainId === member.id;
+    if (!isCaptain && !hasCommandAccess(member)) {
+      return message.reply(`❌ Only **${team.name}**'s captain or an admin can set its banner.`);
+    }
+    if (t.status === 'finished') return message.reply('❌ This tournament is over.');
+
+    // An attachment on the command itself wins; otherwise the newest image this
+    // member posted in the channel is used.
+    let url = null;
+    const own = message.attachments && message.attachments.first();
+    if (own && String(own.contentType || '').startsWith('image/')) {
+      url = own.url;
+    } else {
+      const found = await newestOwnImage(message.channel, member.id);
+      if (found) url = found.url;
+    }
+    if (!url) {
+      return message.reply('❌ I could not find an image. Upload your banner in this channel then run `!tbanner <team>` again, or attach it straight to the command.');
+    }
+
+    tournament.setBanner(t, team.id, url);
+    if (t.status === 'signup' || t.status === 'ready') await renderSignup(t, guild);
+    return message.reply({ embeds: [tourUI.buildTeamCard(t, team, guild)] });
+  }
+
+  if (content === '!tteams') {
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+    if (!t.teams.length) return message.reply('📭 No teams have registered yet.');
+    const lines = t.teams.map(team => {
+      const mark = team.status === 'eliminated' ? '❌' : team.status === 'champion' ? '🏆' : '⚔️';
+      return `${mark} **${tourUI.clip(team.name, 24)}** — ${tourUI.roster(guild, team, 180)}`;
+    });
+    const embed = new EmbedBuilder()
+      .setTitle(`${STICKERS.game} 🏆 ${t.name} — Teams (${t.teams.length})`)
+      .setColor(COLORS.primary)
+      .setDescription(tourUI.clip(lines.join('\n'), 4000))
+      .setFooter({ text: BRANDING });
+    return message.reply(withThumbnail(embed, guild));
+  }
+
+  if (content.startsWith('!tleave')) {
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+    const team = tournament.findTeam(t, raw.replace(/^&?!tleave\s*/i, '').trim());
+    if (!team) return message.reply('❌ No team matched that name.');
+    const isCaptain = team.captainId === member.id;
+    if (!isCaptain && !hasCommandAccess(member)) {
+      return message.reply(`❌ Only **${team.name}**'s captain or an admin can withdraw it.`);
+    }
+    const res = tournament.removeTeam(t, team.id);
+    if (!res.ok) return message.reply('❌ Sign-ups are closed, so teams can no longer withdraw.');
+    if (t.status === 'signup') await renderSignup(t, guild);
+    return message.reply(`🚪 **${team.name}** withdrew from **${t.name}**.`);
+  }
+
+  if (content === '!tclose') {
+    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can close sign-ups.');
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+    if (t.status !== 'signup') return message.reply('❌ Sign-ups are already closed.');
+    t.status = 'ready';
+    tournament.persist();
+    const signup = await fetchMessage(message.channel, t.signupMessageId);
+    if (signup) await signup.delete().catch(e => note('tour-signup-delete', e));
+    return message.reply(`🔒 Sign-ups for **${t.name}** are closed — **${t.teams.length}** team(s) registered. Start it with \`!tstart\`.`);
+  }
+
+  if (content === '!tcancel') {
+    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can cancel a tournament.');
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+    const res = tournament.cancel(t, member.id);
+    if (!res.ok) return message.reply('❌ Could not cancel the tournament.');
+    return message.reply(`🗑️ **${t.name}** was cancelled and archived.`);
+  }
+
+  if (content === '!tarchive') {
+    if (!hasCommandAccess(member)) return message.reply('❌ Only admins can archive a tournament.');
+    const t = tournament.getActive();
+    if (!t) return message.reply('❌ There is no tournament running.');
+    if (t.status !== 'finished') return message.reply('❌ That tournament has not finished yet.');
+    const res = tournament.archive(t, member.id);
+    if (!res.ok) return message.reply('❌ Could not archive the tournament.');
+    return message.reply(`📦 **${t.name}** was archived. Start a new one with \`!tcreate\`.`);
+  }
+
+  return false;
+}
+
 client.on(Events.MessageCreate, async (message) => {
   try {
   if (message.author.bot) return;
 
   const content = message.content.trim().toLowerCase().replace(/^&/, '!');
+
+  // Tournament commands live on their own prefix so they cannot be shadowed by
+  // a match command, and they are matched before the match routing below.
+  if (content.startsWith('!t') && !content.startsWith('!tact') && !content.startsWith('!test')) {
+    const handled = await handleTournamentCommand(message, content);
+    if (handled !== false) return;
+  }
   const mode = getModeByChannel(message.channel.id);
 
   if (content.startsWith('!clear')) {
